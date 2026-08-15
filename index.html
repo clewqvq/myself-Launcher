@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Minecraft Launcher</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="launcher" data-view="home" aria-label="Minecraft 启动器">
+      <section class="main-view" aria-label="启动器主界面">
+        <div class="profile">
+          <span class="player-name">Steve</span>
+          <div class="avatar-wrap">
+            <img
+              class="player-avatar"
+              src="assets/player-avatar.png"
+              alt="玩家头像占位"
+              draggable="false"
+            >
+          </div>
+        </div>
+
+        <div class="launch-row">
+          <button class="play-button" type="button" aria-label="开始游戏">
+            <svg
+              class="play-triangle"
+              width="46"
+              height="40"
+              viewBox="0 0 46 40"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <polygon
+                points="23,3 43,35 3,35"
+                stroke="#FFFFFF"
+                stroke-width="3.5"
+                stroke-linejoin="round"
+              />
+              <rect
+                class="stop-icon"
+                x="14"
+                y="11"
+                width="18"
+                height="18"
+                rx="5"
+                fill="#FFFFFF"
+              />
+            </svg>
+          </button>
+          <button class="version-name" type="button">1.21.4</button>
+        </div>
+
+        <div class="corner-tile" aria-hidden="true"></div>
+        <svg class="launch-ring" viewBox="0 0 72 72" aria-label="游戏启动进度">
+          <circle class="launch-ring-track" cx="36" cy="36" r="24"></circle>
+          <circle class="launch-ring-fill" cx="36" cy="36" r="24"></circle>
+        </svg>
+        <span class="launch-status" aria-live="polite"></span>
+      </section>
+
+      <section class="version-view" aria-label="版本界面">
+        <div class="version-content">
+          <button class="version-hero" type="button">1.21.4</button>
+          <div class="rename-row">
+            <button class="rename-button" type="button">重命名</button>
+            <input
+              class="rename-input"
+              type="text"
+              value="1.21.4"
+              aria-label="版本名称"
+              spellcheck="false"
+            >
+          </div>
+          <div class="import-row">
+            <button class="import-button" type="button">导入文件夹</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>

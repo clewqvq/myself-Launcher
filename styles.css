@@ -1,0 +1,437 @@
+:root {
+  color-scheme: light;
+  --launcher-black: #14161a;
+  --launcher-white: #ffffff;
+  --launcher-ink: #17191d;
+  --launcher-muted: #6f7780;
+  --launcher-button-size: 96px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--launcher-white);
+  color: var(--launcher-ink);
+  font-family:
+    "Segoe UI Variable Display",
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    system-ui,
+    sans-serif;
+  font-weight: 700;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.launcher {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--launcher-white);
+}
+
+.main-view {
+  position: absolute;
+  inset: 0;
+  min-height: 100dvh;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 420ms ease,
+    transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.version-view {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 24px;
+  padding-top: calc(33.333dvh - 30px);
+  background: var(--launcher-white);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 420ms ease,
+    transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.launcher[data-view="version"] .main-view {
+  opacity: 0;
+  transform: translateY(-18px);
+  pointer-events: none;
+}
+
+.launcher[data-view="version"] .version-view {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.version-hero {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  color: var(--launcher-ink);
+  font-size: clamp(36px, 9vw, 52px);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.15;
+  cursor: pointer;
+  transform-origin: center center;
+  white-space: nowrap;
+}
+
+.version-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.rename-button {
+  padding: 9px 16px;
+  border: 2px solid var(--launcher-black);
+  border-radius: 12px;
+  background: var(--launcher-white);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.import-row {
+  display: flex;
+  justify-content: center;
+}
+
+.import-button {
+  padding: 9px 16px;
+  border: 2px solid var(--launcher-black);
+  border-radius: 12px;
+  background: var(--launcher-white);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rename-input {
+  width: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--launcher-white);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  opacity: 0;
+  outline: none;
+  transform: translateX(-8px);
+  pointer-events: none;
+  transition:
+    width 340ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding 260ms ease,
+    border-color 220ms ease,
+    opacity 220ms ease,
+    transform 340ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.rename-row.is-editing .rename-input {
+  width: 220px;
+  padding: 9px 14px;
+  border-color: var(--launcher-black);
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.profile {
+  position: absolute;
+  top: calc(33.333dvh - 64px - 48px);
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  transform: translateX(-50%);
+}
+
+.player-name {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--launcher-ink);
+  white-space: nowrap;
+}
+
+.avatar-wrap {
+  width: 128px;
+  height: 128px;
+  border-radius: 24px;
+  overflow: hidden;
+  background: #f4f5f6;
+  box-shadow:
+    0 18px 46px rgb(20 22 26 / 0.12),
+    0 0 0 1px rgb(20 22 26 / 0.08);
+}
+
+.player-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+
+.launch-row {
+  position: absolute;
+  top: calc(66.666dvh - 48px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  transform: translateX(-50%);
+}
+
+.play-button {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: var(--launcher-button-size);
+  height: var(--launcher-button-size);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--launcher-black);
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow:
+    0 18px 44px rgb(20 22 26 / 0.18),
+    0 0 0 1px rgb(20 22 26 / 0.14);
+}
+
+.play-button:active {
+  transform: scale(0.9);
+}
+
+.play-triangle {
+  display: block;
+  margin-left: 4px;
+  transform: rotate(90deg);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 600ms ease,
+    transform 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.stop-icon {
+  opacity: 0;
+  transform: scale(0.4) rotate(45deg);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 600ms ease,
+    transform 600ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.play-button.is-running .play-triangle {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.35);
+}
+
+.play-button.is-running .stop-icon {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+.version-name {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: auto;
+  min-width: 0;
+  margin-left: -16px;
+  padding: 10px 14px 10px 32px;
+  border: 3px solid var(--launcher-black);
+  border-radius: 14px;
+  background: var(--launcher-white);
+  appearance: none;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--launcher-white);
+  -webkit-text-stroke: 1px var(--launcher-black);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.corner-tile {
+  position: absolute;
+  right: 32px;
+  bottom: 32px;
+  width: 64px;
+  height: 64px;
+  border-radius: 20px;
+  background: var(--launcher-black);
+}
+
+.launch-ring {
+  position: absolute;
+  left: 32px;
+  bottom: 32px;
+  width: 72px;
+  height: 72px;
+}
+
+.launch-ring-track,
+.launch-ring-fill {
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.launch-ring-track {
+  stroke: #c2c7cd;
+}
+
+.launch-ring-fill {
+  stroke: #9fd8ff;
+  stroke-dasharray: 150.796447;
+  stroke-dashoffset: 150.796447;
+  transform: rotate(-90deg);
+  transform-origin: 36px 36px;
+  transition: stroke-dashoffset 420ms ease;
+}
+
+.launch-status {
+  position: absolute;
+  left: 32px;
+  bottom: 116px;
+  max-width: 180px;
+  color: var(--launcher-ink);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.launch-status.is-error {
+  color: #a33b36;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --launcher-button-size: 84px;
+  }
+
+  .version-view {
+    padding-top: calc(33.333dvh - 20px);
+  }
+
+  .profile {
+    top: calc(33.333dvh - 52px - 43px);
+    gap: 12px;
+  }
+
+  .player-name {
+    font-size: 24px;
+  }
+
+  .avatar-wrap {
+    width: 104px;
+    height: 104px;
+    border-radius: 20px;
+  }
+
+  .launch-row {
+    top: calc(66.666dvh - 42px);
+    gap: 0;
+  }
+
+  .play-button {
+    width: var(--launcher-button-size);
+    height: var(--launcher-button-size);
+  }
+
+  .play-triangle {
+    width: 40px;
+    height: 35px;
+    margin-left: 3px;
+  }
+
+  .version-name {
+    width: auto;
+    min-width: 0;
+    margin-left: -16px;
+    padding: 8px 10px 8px 26px;
+    border-radius: 12px;
+    font-size: 17px;
+  }
+
+  .rename-input {
+    font-size: 15px;
+  }
+
+  .rename-row.is-editing .rename-input {
+    width: 180px;
+    padding: 8px 12px;
+  }
+
+  .launch-ring {
+    left: 20px;
+    bottom: 20px;
+    width: 64px;
+    height: 64px;
+  }
+
+  .launch-status {
+    left: 20px;
+    bottom: 94px;
+    max-width: 160px;
+    font-size: 12px;
+  }
+
+  .corner-tile {
+    right: 20px;
+    bottom: 20px;
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-view,
+  .version-view {
+    transition: none;
+  }
+}
