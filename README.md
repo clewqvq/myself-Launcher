@@ -9,6 +9,11 @@
 - 自动读取版本 json、Fabric 配置和账号信息
 - 点击开始按钮启动 Minecraft，并显示启动进度环
 - 游戏运行中再次点击开始按钮可关闭游戏
+- 右键玩家头像可进行 Microsoft 正版验证，登录后使用正版玩家名、头像和令牌启动游戏
+
+## 正版验证说明
+
+正版验证使用 Minecraft 官方客户端 ID 完成设备码登录，不需要额外注册 Azure 应用，也不需要向 Mojang 单独申请 Minecraft API 权限。验证时需要该微软账号已购买 Minecraft Java 版。
 
 ## 运行
 

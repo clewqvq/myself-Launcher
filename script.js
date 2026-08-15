@@ -8,10 +8,23 @@ const importButton = document.querySelector(".import-button");
 const playButton = document.querySelector(".play-button");
 const launchRingFill = document.querySelector(".launch-ring-fill");
 const launchStatus = document.querySelector(".launch-status");
+const folderList = document.querySelector(".folder-list");
+const versionList = document.querySelector(".version-list");
+const playerName = document.querySelector(".player-name");
+const playerAvatar = document.querySelector(".player-avatar");
+const accountMenu = document.querySelector(".account-menu");
+const verifyPremiumButton = document.querySelector(".verify-premium-button");
 
 let currentVersion = "1.21.4";
 let isEditing = false;
 let isGameRunning = false;
+let stopRequested = false;
+let premiumLoginPending = false;
+let premiumPollTimer = null;
+let importedFolders = [];
+let selectedSourceFolder = "";
+let importedVersions = [];
+let selectedVersionId = "";
 const STORAGE_KEY = "minecraft-launcher-version";
 
 async function saveVersion(value) {
@@ -70,6 +83,330 @@ function renderVersion(value = currentVersion) {
 
   if (!isEditing) {
     renameInput.value = currentVersion;
+  }
+}
+
+function renderAccount(account) {
+  if (account?.signed_in) {
+    playerName.textContent = account.display_name || "Player";
+    playerAvatar.src = account.avatar_path || "assets/player-avatar.png";
+  } else {
+    playerName.textContent = "Steve";
+    playerAvatar.src = "assets/player-avatar.png";
+  }
+}
+
+async function loadAccount() {
+  if (!window.pywebview?.api?.get_account_info) {
+    return;
+  }
+
+  try {
+    const result = await window.pywebview.api.get_account_info();
+    renderAccount(result);
+  } catch {
+    // Keep the default player when the native account API is unavailable.
+  }
+}
+
+function positionAccountMenu() {
+  const rect = playerAvatar.getBoundingClientRect();
+  const menuWidth = accountMenu.offsetWidth || 136;
+  let left = rect.right + 14;
+
+  if (left + menuWidth > window.innerWidth - 12) {
+    left = Math.max(12, window.innerWidth - menuWidth - 12);
+  }
+
+  accountMenu.style.left = `${left}px`;
+  accountMenu.style.top = `${rect.top + rect.height / 2}px`;
+}
+
+function openAccountMenu() {
+  positionAccountMenu();
+  accountMenu.classList.add("is-open");
+  requestAnimationFrame(() => positionAccountMenu());
+}
+
+function closeAccountMenu() {
+  accountMenu.classList.remove("is-open");
+}
+
+function updateVerifyButton() {
+  verifyPremiumButton.disabled = premiumLoginPending;
+  verifyPremiumButton.textContent = premiumLoginPending
+    ? "验证中..."
+    : "正版验证";
+}
+
+async function handlePremiumLogin() {
+  if (!window.pywebview?.api?.start_premium_login) {
+    setLaunchStatus("请在打包后的 exe 中验证正版", true);
+    return;
+  }
+
+  premiumLoginPending = true;
+  updateVerifyButton();
+  setLaunchStatus("正在打开微软授权页面");
+
+  try {
+    const result = await window.pywebview.api.start_premium_login();
+
+    if (result.state === "error") {
+      premiumLoginPending = false;
+      updateVerifyButton();
+      setLaunchStatus(
+        result.error || result.message || "正版验证失败",
+        true
+      );
+      return;
+    }
+
+    setLaunchStatus(result.message || "请在浏览器中完成微软授权");
+    startPremiumStatusPolling();
+  } catch (error) {
+    premiumLoginPending = false;
+    updateVerifyButton();
+    setLaunchStatus(error?.message || "正版验证失败", true);
+  }
+}
+
+function startPremiumStatusPolling() {
+  clearInterval(premiumPollTimer);
+
+  premiumPollTimer = setInterval(async () => {
+    if (
+      !premiumLoginPending ||
+      !window.pywebview?.api?.get_premium_login_status
+    ) {
+      clearInterval(premiumPollTimer);
+      return;
+    }
+
+    try {
+      const status =
+        await window.pywebview.api.get_premium_login_status();
+
+      if (status.state === "success") {
+        premiumLoginPending = false;
+        updateVerifyButton();
+        clearInterval(premiumPollTimer);
+        await loadAccount();
+        setLaunchStatus(status.message || "正版验证成功");
+      } else if (status.state === "error") {
+        premiumLoginPending = false;
+        updateVerifyButton();
+        clearInterval(premiumPollTimer);
+        setLaunchStatus(
+          status.error || status.message || "正版验证失败",
+          true
+        );
+      } else {
+        setLaunchStatus(status.message || "等待微软授权");
+      }
+    } catch {
+      // Keep polling while the native bridge is processing the login.
+    }
+  }, 1500);
+}
+
+function renderFolderSidebar() {
+  if (!folderList) {
+    return;
+  }
+
+  folderList.replaceChildren();
+
+  for (const folder of importedFolders) {
+    if (!folder.source_folder) {
+      continue;
+    }
+
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "folder-item";
+    item.dataset.sourceFolder = folder.source_folder;
+
+    const name = document.createElement("span");
+    name.className = "folder-name";
+    name.textContent =
+      folder.folder_name ||
+      folder.display_name ||
+      folder.version_id ||
+      folder.source_folder;
+    item.appendChild(name);
+
+    if (folder.source_folder === selectedSourceFolder) {
+      item.classList.add("is-active");
+    }
+
+    item.addEventListener("click", () => {
+      handleFolderSelect(folder.source_folder);
+    });
+    folderList.appendChild(item);
+  }
+}
+
+function renderVersionSidebar() {
+  if (!versionList) {
+    return;
+  }
+
+  versionList.replaceChildren();
+
+  for (const version of importedVersions) {
+    if (!version.version_id) {
+      continue;
+    }
+
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "version-sidebar-item";
+    item.dataset.versionId = version.version_id;
+
+    const label = document.createElement("span");
+    label.className = "version-sidebar-label";
+    label.textContent =
+      version.display_name || version.version_id;
+    item.appendChild(label);
+
+    if (version.version_id === selectedVersionId) {
+      item.classList.add("is-active");
+    }
+
+    item.addEventListener("click", () => {
+      handleVersionSelect(version.version_id);
+    });
+    versionList.appendChild(item);
+  }
+}
+
+async function refreshFolderState() {
+  if (!window.pywebview?.api?.get_imported_folders) {
+    return;
+  }
+
+  try {
+    const result = await window.pywebview.api.get_imported_folders();
+
+    importedFolders = Array.isArray(result.folders) ? result.folders : [];
+    selectedSourceFolder = result.selected_folder || "";
+    renderFolderSidebar();
+  } catch {
+    // Keep the current sidebar state when the native bridge is unavailable.
+  }
+}
+
+async function refreshVersionState() {
+  if (!window.pywebview?.api?.get_versions || !selectedSourceFolder) {
+    importedVersions = [];
+    selectedVersionId = "";
+    renderVersionSidebar();
+    return;
+  }
+
+  try {
+    const result = await window.pywebview.api.get_versions(
+      selectedSourceFolder
+    );
+
+    importedVersions = Array.isArray(result.versions)
+      ? result.versions
+      : [];
+    selectedVersionId = result.selected_version_id || "";
+    renderVersionSidebar();
+  } catch {
+    // Keep the current version list when the native bridge is unavailable.
+  }
+}
+
+async function loadAppState() {
+  if (!window.pywebview?.api?.get_imported_folders) {
+    return;
+  }
+
+  try {
+    await refreshFolderState();
+    await refreshVersionState();
+    const saved = await window.pywebview.api.load_version();
+
+    if (saved && String(saved).trim()) {
+      currentVersion = String(saved).trim();
+      renderVersion(currentVersion);
+    }
+
+    await loadAccount();
+  } catch {
+    // Ignore transient startup failures; the UI keeps its default state.
+  }
+}
+
+async function handleVersionSelect(versionId) {
+  if (
+    !window.pywebview?.api?.select_version ||
+    !selectedSourceFolder ||
+    !versionId
+  ) {
+    return;
+  }
+
+  if (isEditing) {
+    isEditing = false;
+    renameRow.classList.remove("is-editing");
+    renameInput.blur();
+  }
+
+  setLaunchStatus("正在检测游戏版本");
+
+  try {
+    const result = await window.pywebview.api.select_version(
+      selectedSourceFolder,
+      versionId
+    );
+
+    if (result.ok) {
+      currentVersion =
+        result.display_name || result.version_id || currentVersion;
+      renderVersion(currentVersion);
+      await refreshVersionState();
+      setLaunchStatus(result.message || "已切换版本");
+    } else {
+      setLaunchStatus(result.message || "未找到游戏版本", true);
+    }
+  } catch (error) {
+    setLaunchStatus(error?.message || "切换版本失败", true);
+  }
+}
+
+async function handleFolderSelect(sourceFolder) {
+  if (!window.pywebview?.api?.select_folder || !sourceFolder) {
+    return;
+  }
+
+  if (isEditing) {
+    isEditing = false;
+    renameRow.classList.remove("is-editing");
+    renameInput.blur();
+  }
+
+  setLaunchStatus("正在检测游戏文件");
+
+  try {
+    const result = await window.pywebview.api.select_folder(sourceFolder);
+
+    if (result.ok) {
+      selectedSourceFolder = result.source_folder || sourceFolder;
+      currentVersion =
+        result.display_name || result.version_id || currentVersion;
+      renderVersion(currentVersion);
+      await refreshFolderState();
+      await refreshVersionState();
+      setLaunchStatus(result.message || "已切换文件夹");
+    } else {
+      setLaunchStatus(result.message || "未找到游戏文件", true);
+    }
+  } catch (error) {
+    setLaunchStatus(error?.message || "切换失败", true);
   }
 }
 
@@ -164,6 +501,8 @@ async function commitRename() {
   renameRow.classList.remove("is-editing");
   renameInput.blur();
   await saveVersion(currentVersion);
+  await refreshFolderState();
+  await refreshVersionState();
 }
 
 renameButton.addEventListener("click", startRename);
@@ -180,12 +519,51 @@ renameInput.addEventListener("keydown", (event) => {
 
 renameInput.addEventListener("blur", commitRename);
 
+playerAvatar.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  openAccountMenu();
+});
+
+verifyPremiumButton.addEventListener("click", () => {
+  closeAccountMenu();
+  handlePremiumLogin();
+});
+
+document.addEventListener("click", (event) => {
+  if (
+    !accountMenu.contains(event.target) &&
+    event.target !== playerAvatar
+  ) {
+    closeAccountMenu();
+  }
+});
+
+document.addEventListener("contextmenu", (event) => {
+  if (
+    accountMenu.classList.contains("is-open") &&
+    !accountMenu.contains(event.target) &&
+    event.target !== playerAvatar
+  ) {
+    closeAccountMenu();
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (accountMenu.classList.contains("is-open")) {
+    positionAccountMenu();
+  }
+});
+
 renderVersion(currentVersion);
 
-if (window.pywebview?.api?.load_version) {
-  loadSavedVersion();
+if (window.pywebview?.api?.get_imported_folders) {
+  loadAppState();
 } else {
-  window.addEventListener("pywebviewready", loadSavedVersion);
+  window.addEventListener("pywebviewready", () => {
+    if (window.pywebview?.api?.get_imported_folders) {
+      loadAppState();
+    }
+  });
   loadSavedVersion();
 }
 
@@ -220,9 +598,12 @@ async function handleImport() {
     const result = await window.pywebview.api.import_folder();
 
     if (result.ok) {
-      currentVersion = result.version_id;
+      selectedSourceFolder = result.source_folder || "";
+      currentVersion =
+        result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
       await saveVersion(currentVersion);
+      await loadAppState();
       setLaunchStatus(result.message || "已导入文件夹");
     } else {
       setLaunchStatus(result.message || "导入失败", true);
@@ -245,6 +626,11 @@ async function handleLaunch() {
 
     if (!result.ok) {
       setLaunchStatus(result.message || "启动失败", true);
+    } else {
+      stopRequested = false;
+      isGameRunning = true;
+      playButton.classList.add("is-running");
+      playButton.setAttribute("aria-label", "关闭游戏");
     }
   } catch (error) {
     setLaunchStatus(error?.message || "启动失败", true);
@@ -265,6 +651,11 @@ async function handlePlayButton() {
 
       if (!result.ok) {
         setLaunchStatus(result.message || "关闭失败", true);
+      } else {
+        stopRequested = true;
+        isGameRunning = false;
+        playButton.classList.remove("is-running");
+        playButton.setAttribute("aria-label", "开始游戏");
       }
     } catch (error) {
       setLaunchStatus(error?.message || "关闭失败", true);
@@ -283,8 +674,23 @@ async function pollLaunchStatus() {
 
   try {
     const status = await window.pywebview.api.get_launch_status();
+    const progress = Number(status.progress || 0);
+    const hasError = Boolean(status.error);
 
-    isGameRunning = Boolean(status.running);
+    if (hasError) {
+      stopRequested = false;
+      isGameRunning = false;
+    } else if (stopRequested) {
+      if (!status.running && (progress === 0 || progress >= 100)) {
+        stopRequested = false;
+      }
+      isGameRunning = false;
+    } else {
+      const idle = !status.running && progress === 0;
+      const exited = !status.running && progress >= 100;
+      isGameRunning = !idle && !exited;
+    }
+
     playButton.classList.toggle("is-running", isGameRunning);
     playButton.setAttribute(
       "aria-label",
