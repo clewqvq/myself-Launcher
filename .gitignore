@@ -2,3 +2,7 @@
 build/
 __pycache__/
 *.pyc
+config.json
+*.log
+avatar.png
+launcher_profiles.json

@@ -89,11 +89,52 @@ function renderVersion(value = currentVersion) {
 function renderAccount(account) {
   if (account?.signed_in) {
     playerName.textContent = account.display_name || "Player";
-    playerAvatar.src = account.avatar_path || "assets/player-avatar.png";
+    renderPremiumAvatar(account.avatar_path || "assets/player-avatar.png");
   } else {
     playerName.textContent = "Steve";
     playerAvatar.src = "assets/player-avatar.png";
   }
+}
+
+function renderPremiumAvatar(src) {
+  const image = new Image();
+
+  image.onload = () => {
+    try {
+      const sourceSize = Math.max(
+        1,
+        Math.floor(image.naturalWidth / 8)
+      );
+      const sourceX = sourceSize;
+      const sourceY = sourceSize;
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 128;
+
+      const context = canvas.getContext("2d");
+      context.imageSmoothingEnabled = false;
+      context.drawImage(
+        image,
+        sourceX,
+        sourceY,
+        sourceSize,
+        sourceSize,
+        0,
+        0,
+        128,
+        128
+      );
+      playerAvatar.src = canvas.toDataURL("image/png");
+    } catch {
+      playerAvatar.src = "assets/player-avatar.png";
+    }
+  };
+
+  image.onerror = () => {
+    playerAvatar.src = "assets/player-avatar.png";
+  };
+
+  image.src = src;
 }
 
 async function loadAccount() {

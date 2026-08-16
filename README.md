@@ -24,3 +24,7 @@
 ```powershell
 .venv\bin\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name MinecraftLauncher --add-data "index.html;." --add-data "styles.css;." --add-data "script.js;." --add-data "assets/player-avatar.png;assets" launcher.py
 ```
+
+## 发布安全
+
+每次推送到 GitHub 前会通过本地 `pre-push` 钩子运行 `release_check.py`，检查已跟踪文件里是否包含玩家名、UUID、GitHub 令牌、本地配置、日志或头像缓存。当前项目已启用 `.githooks`。
