@@ -727,10 +727,19 @@ button:focus-visible {
     0 14px 36px rgb(88 169 242 / 0.18);
 }
 
-.corner-tile {
+.corner-menu {
   position: absolute;
   right: 32px;
   bottom: 32px;
+  width: 64px;
+  height: calc(100dvh - 96px);
+}
+
+.corner-tile {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 12;
   display: grid;
   width: 64px;
   height: 64px;
@@ -759,13 +768,14 @@ button:focus-visible {
 
 .corner-panel {
   position: absolute;
-  right: 32px;
-  bottom: 32px;
+  right: 0;
+  bottom: 0;
   z-index: 8;
   display: flex;
   width: 64px;
-  max-height: calc(100dvh - 96px);
-  padding: 12px;
+  max-height: 100%;
+  padding: 12px 12px 76px;
+  align-items: center;
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
@@ -973,19 +983,27 @@ button:focus-visible {
     font-size: 12px;
   }
 
-  .corner-tile {
+  .corner-menu {
     right: 20px;
     bottom: 20px;
+    width: 56px;
+    height: calc(100dvh - 76px);
+  }
+
+  .corner-tile {
+    right: 0;
+    bottom: 0;
     width: 56px;
     height: 56px;
     border-radius: 20px;
   }
 
   .corner-panel {
-    right: 20px;
-    bottom: 20px;
+    right: 0;
+    bottom: 0;
     width: 56px;
-    padding: 10px;
+    max-height: 100%;
+    padding: 10px 10px 66px;
     gap: 10px;
     border-radius: 20px;
   }

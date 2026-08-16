@@ -15,6 +15,7 @@ const playerAvatar = document.querySelector(".player-avatar");
 const accountMenu = document.querySelector(".account-menu");
 const verifyPremiumButton = document.querySelector(".verify-premium-button");
 const cornerTile = document.querySelector(".corner-tile");
+const cornerMenu = document.querySelector(".corner-menu");
 const cornerPanel = document.querySelector(".corner-panel");
 const cornerSettingsButton = document.querySelector(
   ".corner-settings-button"
@@ -39,6 +40,7 @@ let isEditing = false;
 let isGameRunning = false;
 let stopRequested = false;
 let isCornerPanelOpen = false;
+let cornerPanelCloseTimer = null;
 let premiumLoginPending = false;
 let premiumPollTimer = null;
 let launchPollTimer = null;
@@ -197,23 +199,17 @@ function closeAccountMenu() {
 
 function openCornerPanel() {
   closeAccountMenu();
+  clearTimeout(cornerPanelCloseTimer);
   isCornerPanelOpen = true;
   cornerPanel.classList.add("is-open");
   cornerTile.setAttribute("aria-expanded", "true");
 }
 
 function closeCornerPanel() {
+  clearTimeout(cornerPanelCloseTimer);
   isCornerPanelOpen = false;
   cornerPanel.classList.remove("is-open");
   cornerTile.setAttribute("aria-expanded", "false");
-}
-
-function toggleCornerPanel() {
-  if (isCornerPanelOpen) {
-    closeCornerPanel();
-  } else {
-    openCornerPanel();
-  }
 }
 
 function applySettings(settings) {
@@ -712,7 +708,14 @@ verifyPremiumButton.addEventListener("click", () => {
   handlePremiumLogin();
 });
 
-cornerTile.addEventListener("click", toggleCornerPanel);
+cornerMenu.addEventListener("mouseenter", openCornerPanel);
+cornerMenu.addEventListener("mouseleave", () => {
+  cornerPanelCloseTimer = setTimeout(closeCornerPanel, 180);
+});
+cornerPanel.addEventListener("mouseenter", () => {
+  clearTimeout(cornerPanelCloseTimer);
+});
+cornerTile.addEventListener("click", openCornerPanel);
 cornerSettingsButton.addEventListener("click", openSettings);
 
 settingsHero.addEventListener("click", () => {
