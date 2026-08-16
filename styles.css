@@ -310,6 +310,11 @@ button:focus-visible {
   overflow-y: auto;
 }
 
+.settings-general-panel[hidden],
+.settings-personalization-panel[hidden] {
+  display: none !important;
+}
+
 .settings-wallpaper-preview {
   width: 100%;
   height: 150px;
