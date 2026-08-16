@@ -378,6 +378,10 @@ class Api:
         if isinstance(value, str) and value.strip():
             return value.strip()
 
+        default_version = self._get_settings().get("default_version")
+        if default_version:
+            return str(default_version)
+
         return None
 
     def save_version(self, value):
@@ -401,6 +405,76 @@ class Api:
         data["version"] = value
         self._write_config(data)
         return True
+
+    def _settings_defaults(self):
+        return {
+            "java_path": "",
+            "memory_mb": 4096,
+            "default_version": "",
+            "minimize_on_launch": False,
+            "auto_select_last_folder": True,
+        }
+
+    def _get_settings(self):
+        defaults = self._settings_defaults()
+        saved = self._read_config().get("settings")
+
+        if isinstance(saved, dict):
+            defaults.update(saved)
+
+        defaults["memory_mb"] = max(
+            512,
+            min(16384, int(defaults.get("memory_mb") or 4096)),
+        )
+        return defaults
+
+    def get_settings(self):
+        return {
+            **self._get_settings(),
+            "ok": True,
+        }
+
+    def save_settings(self, settings):
+        if not isinstance(settings, dict):
+            return {"ok": False, "message": "设置数据无效"}
+
+        saved = {
+            "java_path": str(settings.get("java_path") or "").strip(),
+            "memory_mb": max(
+                512,
+                min(16384, int(settings.get("memory_mb") or 4096)),
+            ),
+            "default_version": str(
+                settings.get("default_version") or ""
+            ).strip(),
+            "minimize_on_launch": bool(
+                settings.get("minimize_on_launch")
+            ),
+            "auto_select_last_folder": bool(
+                settings.get("auto_select_last_folder", True)
+            ),
+        }
+        data = self._read_config()
+        data["settings"] = saved
+        self._write_config(data)
+        return {**saved, "ok": True, "message": "设置已保存"}
+
+    def browse_java(self):
+        try:
+            selected = webview.windows[0].create_file_dialog(
+                webview.FileDialog.OPEN,
+                file_types=("Java 可执行文件 (*.exe)",),
+            )
+        except Exception as exc:
+            return {"ok": False, "message": f"无法打开文件选择器：{exc}"}
+
+        if not selected:
+            return {"ok": False, "message": "未选择 Java"}
+
+        return {
+            "ok": True,
+            "java_path": str(Path(selected[0]).resolve()),
+        }
 
     def _read_saved_account(self):
         data = self._read_config()
@@ -751,6 +825,9 @@ class Api:
         return account
 
     def _load_imported_info(self):
+        if not self._get_settings().get("auto_select_last_folder", True):
+            return self.imported_info
+
         data = self._migrate_imported_list(self._read_config())
         folders = data.get("imported_folders", [])
         selected = data.get("selected_folder")
@@ -1141,6 +1218,10 @@ class Api:
         }
 
     def _find_java(self):
+        configured_java = self._get_settings().get("java_path")
+        if configured_java and Path(configured_java).exists():
+            return Path(configured_java)
+
         candidates = [
             Path(r"I:\hmcl\bin\javaw.exe"),
             Path(r"I:\hmcl\bin\java.exe"),
@@ -1196,6 +1277,7 @@ class Api:
         if not java:
             raise RuntimeError("未找到可用的 Java")
 
+        memory_mb = self._get_settings().get("memory_mb", 4096)
         natives = info["natives"]
         premium_account = self._refresh_premium_account()
 
@@ -1216,8 +1298,8 @@ class Api:
 
         args = [
             str(java),
-            "-Xms512m",
-            "-Xmx4G",
+            f"-Xms{min(memory_mb, 1024)}m",
+            f"-Xmx{memory_mb}m",
             f"-Djava.library.path={natives}",
             f"-Djna.tmpdir={natives}",
             f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
@@ -1344,6 +1426,11 @@ class Api:
                 )
 
             self.launch_state.set_process(process)
+            if self._get_settings().get("minimize_on_launch"):
+                try:
+                    webview.windows[0].minimize()
+                except Exception:
+                    pass
             self.launch_state.update(100, "游戏已启动")
         except Exception as exc:
             self.launch_state.update(0, "启动失败", str(exc))

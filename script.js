@@ -14,11 +14,31 @@ const playerName = document.querySelector(".player-name");
 const playerAvatar = document.querySelector(".player-avatar");
 const accountMenu = document.querySelector(".account-menu");
 const verifyPremiumButton = document.querySelector(".verify-premium-button");
+const cornerTile = document.querySelector(".corner-tile");
+const cornerPanel = document.querySelector(".corner-panel");
+const cornerSettingsButton = document.querySelector(
+  ".corner-settings-button"
+);
+const settingsView = document.querySelector(".settings-view");
+const settingsHero = document.querySelector(".settings-hero");
+const settingsJavaPath = document.querySelector(".settings-java-path");
+const settingsMemory = document.querySelector(".settings-memory");
+const settingsDefaultVersion = document.querySelector(
+  ".settings-default-version"
+);
+const settingsMinimize = document.querySelector(".settings-minimize");
+const settingsAutoFolder = document.querySelector(".settings-auto-folder");
+const settingsBrowseButton = document.querySelector(
+  ".settings-browse-button"
+);
+const saveSettingsButton = document.querySelector(".save-settings-button");
+const settingsStatus = document.querySelector(".settings-status");
 
 let currentVersion = "1.21.4";
 let isEditing = false;
 let isGameRunning = false;
 let stopRequested = false;
+let isCornerPanelOpen = false;
 let premiumLoginPending = false;
 let premiumPollTimer = null;
 let launchPollTimer = null;
@@ -27,6 +47,7 @@ let selectedSourceFolder = "";
 let importedVersions = [];
 let selectedVersionId = "";
 const STORAGE_KEY = "minecraft-launcher-version";
+const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
 async function saveVersion(value) {
   if (window.pywebview?.api?.save_version) {
@@ -172,6 +193,122 @@ function openAccountMenu() {
 
 function closeAccountMenu() {
   accountMenu.classList.remove("is-open");
+}
+
+function openCornerPanel() {
+  closeAccountMenu();
+  isCornerPanelOpen = true;
+  cornerPanel.classList.add("is-open");
+  cornerTile.setAttribute("aria-expanded", "true");
+}
+
+function closeCornerPanel() {
+  isCornerPanelOpen = false;
+  cornerPanel.classList.remove("is-open");
+  cornerTile.setAttribute("aria-expanded", "false");
+}
+
+function toggleCornerPanel() {
+  if (isCornerPanelOpen) {
+    closeCornerPanel();
+  } else {
+    openCornerPanel();
+  }
+}
+
+function applySettings(settings) {
+  if (!settings) {
+    return;
+  }
+
+  settingsJavaPath.value = settings.java_path || "";
+  settingsMemory.value = settings.memory_mb || 4096;
+  settingsDefaultVersion.value = settings.default_version || "";
+  settingsMinimize.checked = Boolean(settings.minimize_on_launch);
+  settingsAutoFolder.checked = Boolean(
+    settings.auto_select_last_folder ?? true
+  );
+}
+
+async function loadSettings() {
+  let settings = null;
+
+  if (window.pywebview?.api?.get_settings) {
+    try {
+      settings = await window.pywebview.api.get_settings();
+    } catch {
+      settings = null;
+    }
+  }
+
+  if (!settings) {
+    try {
+      settings = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
+    } catch {
+      settings = null;
+    }
+  }
+
+  applySettings(settings);
+}
+
+async function saveSettings() {
+  const settings = {
+    java_path: settingsJavaPath.value.trim(),
+    memory_mb: Number(settingsMemory.value) || 4096,
+    default_version: settingsDefaultVersion.value.trim(),
+    minimize_on_launch: settingsMinimize.checked,
+    auto_select_last_folder: settingsAutoFolder.checked,
+  };
+
+  if (window.pywebview?.api?.save_settings) {
+    try {
+      const result = await window.pywebview.api.save_settings(settings);
+      settingsStatus.textContent = result.message || "设置已保存";
+      await loadAppState();
+      return;
+    } catch (error) {
+      settingsStatus.textContent = error?.message || "设置保存失败";
+      return;
+    }
+  }
+
+  try {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify(settings)
+    );
+    settingsStatus.textContent = "设置已保存";
+  } catch {
+    settingsStatus.textContent = "设置保存失败";
+  }
+}
+
+async function handleBrowseJava() {
+  if (!window.pywebview?.api?.browse_java) {
+    settingsStatus.textContent = "请在打包后的 exe 中选择 Java";
+    return;
+  }
+
+  try {
+    const result = await window.pywebview.api.browse_java();
+
+    if (result.ok) {
+      settingsJavaPath.value = result.java_path || "";
+      settingsStatus.textContent = "已选择 Java";
+    } else {
+      settingsStatus.textContent = result.message || "未选择 Java";
+    }
+  } catch (error) {
+    settingsStatus.textContent = error?.message || "选择 Java 失败";
+  }
+}
+
+function openSettings() {
+  closeCornerPanel();
+  settingsStatus.textContent = "";
+  launcher.dataset.view = "settings";
+  loadSettings();
 }
 
 function updateVerifyButton() {
@@ -466,6 +603,7 @@ function getTextRect(element) {
 }
 
 function animateVersionOpen() {
+  closeCornerPanel();
   const sourceRect = getTextRect(versionChip);
 
   launcher.dataset.view = "version";
@@ -572,6 +710,32 @@ playerAvatar.addEventListener("contextmenu", (event) => {
 verifyPremiumButton.addEventListener("click", () => {
   closeAccountMenu();
   handlePremiumLogin();
+});
+
+cornerTile.addEventListener("click", toggleCornerPanel);
+cornerSettingsButton.addEventListener("click", openSettings);
+
+settingsHero.addEventListener("click", () => {
+  launcher.dataset.view = "home";
+});
+
+settingsBrowseButton.addEventListener("click", handleBrowseJava);
+saveSettingsButton.addEventListener("click", saveSettings);
+
+document.addEventListener("click", (event) => {
+  if (
+    isCornerPanelOpen &&
+    !cornerPanel.contains(event.target) &&
+    event.target !== cornerTile
+  ) {
+    closeCornerPanel();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isCornerPanelOpen) {
+    closeCornerPanel();
+  }
 });
 
 document.addEventListener("click", (event) => {

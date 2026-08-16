@@ -54,7 +54,75 @@
           <button class="version-name" type="button">1.21.4</button>
         </div>
 
-        <div class="corner-tile" aria-hidden="true"></div>
+        <button
+          class="corner-tile"
+          type="button"
+          aria-label="更多功能"
+          aria-expanded="false"
+        >
+          <svg
+            width="28"
+            height="28"
+            viewBox="0 0 32 32"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M7 16h18M16 7v18"
+              stroke="#FFFFFF"
+              stroke-width="3"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+        <div class="corner-panel" aria-label="功能面板">
+          <button
+            class="corner-item corner-settings-button"
+            type="button"
+            aria-label="设置"
+          >
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="corner-item corner-placeholder"
+            type="button"
+            tabindex="-1"
+            aria-hidden="true"
+          ></button>
+          <button
+            class="corner-item corner-placeholder"
+            type="button"
+            tabindex="-1"
+            aria-hidden="true"
+          ></button>
+          <button
+            class="corner-item corner-placeholder"
+            type="button"
+            tabindex="-1"
+            aria-hidden="true"
+          ></button>
+          <button
+            class="corner-item corner-placeholder"
+            type="button"
+            tabindex="-1"
+            aria-hidden="true"
+          ></button>
+        </div>
         <svg class="launch-ring" viewBox="0 0 72 72" aria-label="游戏启动进度">
           <circle class="launch-ring-track" cx="36" cy="36" r="24"></circle>
           <circle class="launch-ring-fill" cx="36" cy="36" r="24"></circle>
@@ -83,6 +151,88 @@
           </div>
           <div class="import-row">
             <button class="import-button" type="button">导入文件夹</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-view" aria-label="设置界面">
+        <div class="settings-content">
+          <button class="settings-hero" type="button">设置</button>
+          <div class="settings-panel glass-surface">
+            <div class="settings-row">
+              <label class="settings-label" for="settings-java">
+                Java 路径
+              </label>
+              <div class="settings-field">
+                <input
+                  id="settings-java"
+                  class="settings-java-path"
+                  type="text"
+                  placeholder="自动检测"
+                  spellcheck="false"
+                >
+                <button
+                  class="settings-browse-button"
+                  type="button"
+                >浏览</button>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <label class="settings-label" for="settings-memory">
+                启动内存
+              </label>
+              <div class="settings-field">
+                <input
+                  id="settings-memory"
+                  class="settings-memory"
+                  type="number"
+                  min="512"
+                  max="16384"
+                  step="512"
+                  value="4096"
+                >
+                <span class="settings-unit">MB</span>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <label class="settings-label" for="settings-version">
+                默认版本
+              </label>
+              <div class="settings-field">
+                <input
+                  id="settings-version"
+                  class="settings-default-version"
+                  type="text"
+                  spellcheck="false"
+                >
+              </div>
+            </div>
+
+            <label class="settings-toggle-row">
+              <span>启动游戏后最小化启动器</span>
+              <input
+                class="settings-minimize"
+                type="checkbox"
+              >
+            </label>
+
+            <label class="settings-toggle-row">
+              <span>启动时自动选择上次文件夹</span>
+              <input
+                class="settings-auto-folder"
+                type="checkbox"
+              >
+            </label>
+
+            <div class="settings-actions">
+              <button
+                class="save-settings-button"
+                type="button"
+              >保存设置</button>
+              <span class="settings-status" aria-live="polite"></span>
+            </div>
           </div>
         </div>
       </section>
