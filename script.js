@@ -304,6 +304,7 @@ async function saveSettings() {
     try {
       const result = await window.pywebview.api.save_settings(settings);
       settingsStatus.textContent = result.message || "设置已保存";
+      applySettings(settings);
       await loadAppState();
       return;
     } catch (error) {
@@ -818,6 +819,11 @@ settingsDarkMode.addEventListener("change", () => {
   document.documentElement.dataset.theme = settingsDarkMode.checked
     ? "dark"
     : "light";
+  if (selectedWallpaperUri) {
+    launcher.style.backgroundImage = `url("${selectedWallpaperUri}")`;
+  } else {
+    launcher.style.backgroundImage = "";
+  }
 });
 
 document.addEventListener("click", (event) => {
@@ -865,15 +871,18 @@ renderVersion(currentVersion);
 
 if (window.pywebview?.api?.get_imported_folders) {
   loadAppState();
+  loadSettings();
   startLaunchPolling();
 } else {
   window.addEventListener("pywebviewready", () => {
     if (window.pywebview?.api?.get_imported_folders) {
       loadAppState();
+      loadSettings();
       startLaunchPolling();
     }
   });
   loadSavedVersion();
+  loadSettings();
 }
 
 function setLaunchStatus(message, isError = false) {
