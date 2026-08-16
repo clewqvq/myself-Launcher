@@ -173,6 +173,25 @@ def _avatar_data_uri(path):
         return ""
 
 
+def _image_data_uri(path):
+    mime_by_suffix = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }
+
+    try:
+        path = Path(path)
+        mime = mime_by_suffix.get(path.suffix.lower(), "image/png")
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return ""
+
+
 class LaunchState:
     def __init__(self):
         self._lock = threading.Lock()
@@ -232,6 +251,7 @@ class Api:
         self.premium_login_state = PremiumLoginState()
         self._config_cache = None
         self._avatar_uri_cache = {}
+        self._wallpaper_uri_cache = {}
         self._account_payload_cache = None
         self._version_cache = {}
 
@@ -413,6 +433,8 @@ class Api:
             "default_version": "",
             "minimize_on_launch": False,
             "auto_select_last_folder": True,
+            "dark_mode": False,
+            "wallpaper_path": "",
         }
 
     def _get_settings(self):
@@ -428,11 +450,44 @@ class Api:
         )
         return defaults
 
+    def _wallpaper_uri(self, wallpaper_path):
+        path = Path(wallpaper_path)
+
+        try:
+            stat = path.stat()
+            key = (
+                str(path),
+                stat.st_mtime_ns,
+                stat.st_size,
+            )
+        except Exception:
+            key = str(path)
+
+        cached = self._wallpaper_uri_cache.get(key)
+        if cached is not None:
+            return cached
+
+        uri = _image_data_uri(path)
+        self._wallpaper_uri_cache[key] = uri
+        return uri
+
     def get_settings(self):
-        return {
-            **self._get_settings(),
-            "ok": True,
-        }
+        settings = self._get_settings()
+        wallpaper_path = settings.get("wallpaper_path") or ""
+        wallpaper_uri = ""
+        wallpaper_name = ""
+
+        if wallpaper_path and Path(wallpaper_path).exists():
+            wallpaper_uri = self._wallpaper_uri(wallpaper_path)
+            wallpaper_name = Path(wallpaper_path).name
+
+        settings.update(
+            {
+                "wallpaper_uri": wallpaper_uri,
+                "wallpaper_name": wallpaper_name,
+            }
+        )
+        return {**settings, "ok": True}
 
     def save_settings(self, settings):
         if not isinstance(settings, dict):
@@ -453,10 +508,15 @@ class Api:
             "auto_select_last_folder": bool(
                 settings.get("auto_select_last_folder", True)
             ),
+            "dark_mode": bool(settings.get("dark_mode")),
+            "wallpaper_path": str(
+                settings.get("wallpaper_path") or ""
+            ).strip(),
         }
         data = self._read_config()
         data["settings"] = saved
         self._write_config(data)
+        self._wallpaper_uri_cache.clear()
         return {**saved, "ok": True, "message": "设置已保存"}
 
     def browse_java(self):
@@ -474,6 +534,39 @@ class Api:
         return {
             "ok": True,
             "java_path": str(Path(selected[0]).resolve()),
+        }
+
+    def browse_wallpaper(self):
+        try:
+            selected = webview.windows[0].create_file_dialog(
+                webview.FileDialog.OPEN,
+                file_types=(
+                    "图片文件 (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp)",
+                ),
+            )
+        except Exception as exc:
+            return {"ok": False, "message": f"无法打开图片选择器：{exc}"}
+
+        if not selected:
+            return {"ok": False, "message": "未选择图片"}
+
+        source = Path(selected[0])
+        suffix = source.suffix.lower() or ".png"
+        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+        if suffix not in allowed:
+            return {"ok": False, "message": "不支持的图片格式"}
+
+        target = self.config_path.parent / f"wallpaper{suffix}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        self._wallpaper_uri_cache.clear()
+
+        return {
+            "ok": True,
+            "wallpaper_path": str(target),
+            "wallpaper_name": source.name,
+            "wallpaper_uri": self._wallpaper_uri(target),
         }
 
     def _read_saved_account(self):

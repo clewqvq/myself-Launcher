@@ -22,6 +22,14 @@ const cornerSettingsButton = document.querySelector(
 );
 const settingsView = document.querySelector(".settings-view");
 const settingsHero = document.querySelector(".settings-hero");
+const settingsSidebar = document.querySelector(".settings-sidebar");
+const settingsNavItems = document.querySelectorAll(".settings-nav-item");
+const settingsGeneralPanel = document.querySelector(
+  ".settings-general-panel"
+);
+const settingsPersonalizationPanel = document.querySelector(
+  ".settings-personalization-panel"
+);
 const settingsJavaPath = document.querySelector(".settings-java-path");
 const settingsMemory = document.querySelector(".settings-memory");
 const settingsDefaultVersion = document.querySelector(
@@ -29,6 +37,16 @@ const settingsDefaultVersion = document.querySelector(
 );
 const settingsMinimize = document.querySelector(".settings-minimize");
 const settingsAutoFolder = document.querySelector(".settings-auto-folder");
+const settingsDarkMode = document.querySelector(".settings-dark-mode");
+const settingsWallpaperPath = document.querySelector(
+  ".settings-wallpaper-path"
+);
+const settingsWallpaperPreview = document.querySelector(
+  ".settings-wallpaper-preview"
+);
+const settingsWallpaperButton = document.querySelector(
+  ".settings-wallpaper-button"
+);
 const settingsBrowseButton = document.querySelector(
   ".settings-browse-button"
 );
@@ -41,6 +59,8 @@ let isGameRunning = false;
 let stopRequested = false;
 let isCornerPanelOpen = false;
 let cornerPanelCloseTimer = null;
+let selectedWallpaperPath = "";
+let selectedWallpaperUri = "";
 let premiumLoginPending = false;
 let premiumPollTimer = null;
 let launchPollTimer = null;
@@ -217,6 +237,9 @@ function applySettings(settings) {
     return;
   }
 
+  document.documentElement.dataset.theme = settings.dark_mode
+    ? "dark"
+    : "light";
   settingsJavaPath.value = settings.java_path || "";
   settingsMemory.value = settings.memory_mb || 4096;
   settingsDefaultVersion.value = settings.default_version || "";
@@ -224,6 +247,23 @@ function applySettings(settings) {
   settingsAutoFolder.checked = Boolean(
     settings.auto_select_last_folder ?? true
   );
+  settingsDarkMode.checked = Boolean(settings.dark_mode);
+  selectedWallpaperPath = settings.wallpaper_path || "";
+  selectedWallpaperUri = settings.wallpaper_uri || "";
+
+  if (selectedWallpaperUri) {
+    launcher.style.backgroundImage = `url("${selectedWallpaperUri}")`;
+    settingsWallpaperPreview.style.backgroundImage =
+      `url("${selectedWallpaperUri}")`;
+    settingsWallpaperPath.value =
+      settings.wallpaper_name ||
+      selectedWallpaperPath.split(/[\\/]/).pop() ||
+      "已设置壁纸";
+  } else {
+    launcher.style.backgroundImage = "";
+    settingsWallpaperPreview.style.backgroundImage = "";
+    settingsWallpaperPath.value = "";
+  }
 }
 
 async function loadSettings() {
@@ -255,6 +295,9 @@ async function saveSettings() {
     default_version: settingsDefaultVersion.value.trim(),
     minimize_on_launch: settingsMinimize.checked,
     auto_select_last_folder: settingsAutoFolder.checked,
+    dark_mode: settingsDarkMode.checked,
+    wallpaper_path: selectedWallpaperPath,
+    wallpaper_uri: selectedWallpaperUri,
   };
 
   if (window.pywebview?.api?.save_settings) {
@@ -300,9 +343,48 @@ async function handleBrowseJava() {
   }
 }
 
+async function handleChangeWallpaper() {
+  if (!window.pywebview?.api?.browse_wallpaper) {
+    settingsStatus.textContent = "请在打包后的 exe 中更换壁纸";
+    return;
+  }
+
+  try {
+    const result = await window.pywebview.api.browse_wallpaper();
+
+    if (result.ok) {
+      selectedWallpaperPath = result.wallpaper_path || "";
+      selectedWallpaperUri = result.wallpaper_uri || "";
+      launcher.style.backgroundImage =
+        `url("${selectedWallpaperUri}")`;
+      settingsWallpaperPreview.style.backgroundImage =
+        `url("${selectedWallpaperUri}")`;
+      settingsWallpaperPath.value =
+        result.wallpaper_name || "已设置壁纸";
+      settingsStatus.textContent = "壁纸已选择，保存后生效";
+    } else {
+      settingsStatus.textContent = result.message || "未选择图片";
+    }
+  } catch (error) {
+    settingsStatus.textContent = error?.message || "更换壁纸失败";
+  }
+}
+
+function activateSettingsTab(tab) {
+  settingsNavItems.forEach((item) => {
+    item.classList.toggle(
+      "is-active",
+      item.dataset.settingsTab === tab
+    );
+  });
+  settingsGeneralPanel.hidden = tab !== "general";
+  settingsPersonalizationPanel.hidden = tab !== "personalization";
+}
+
 function openSettings() {
   closeCornerPanel();
   settingsStatus.textContent = "";
+  activateSettingsTab("general");
   launcher.dataset.view = "settings";
   loadSettings();
 }
@@ -722,8 +804,21 @@ settingsHero.addEventListener("click", () => {
   launcher.dataset.view = "home";
 });
 
+settingsNavItems.forEach((item) => {
+  item.addEventListener("click", () => {
+    activateSettingsTab(item.dataset.settingsTab);
+  });
+});
+
 settingsBrowseButton.addEventListener("click", handleBrowseJava);
+settingsWallpaperButton.addEventListener("click", handleChangeWallpaper);
 saveSettingsButton.addEventListener("click", saveSettings);
+
+settingsDarkMode.addEventListener("change", () => {
+  document.documentElement.dataset.theme = settingsDarkMode.checked
+    ? "dark"
+    : "light";
+});
 
 document.addEventListener("click", (event) => {
   if (

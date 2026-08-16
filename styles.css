@@ -13,6 +13,27 @@
   --glass-border: rgba(20 22 26 / 0.1);
   --glass-highlight: rgba(255 255 255 / 0.86);
   --glass-shadow: 0 10px 30px rgb(20 22 26 / 0.09);
+  --page-bg: linear-gradient(145deg, #fbfcfe, #f3f7fb 55%, #eef5fb);
+  --theme-item-bg: rgba(255 255 255 / 0.46);
+  --theme-placeholder-bg: rgba(255 255 255 / 0.32);
+  --theme-toggle-track: rgb(20 22 26 / 0.1);
+  --theme-input-highlight: rgba(255 255 255 / 0.86);
+}
+
+[data-theme="dark"] {
+  --launcher-ink: #eef3f8;
+  --launcher-muted: #9aa7b5;
+  --glass-bg: rgba(24 30 38 / 0.72);
+  --glass-bg-strong: rgba(35 42 52 / 0.9);
+  --glass-bg-blue: rgba(37 84 135 / 0.38);
+  --glass-border: rgba(255 255 255 / 0.14);
+  --glass-highlight: rgba(255 255 255 / 0.12);
+  --glass-shadow: 0 10px 30px rgb(0 0 0 / 0.38);
+  --page-bg: linear-gradient(145deg, #11151a, #181d24 55%, #202730);
+  --theme-item-bg: rgba(255 255 255 / 0.08);
+  --theme-placeholder-bg: rgba(255 255 255 / 0.06);
+  --theme-toggle-track: rgba(255 255 255 / 0.22);
+  --theme-input-highlight: rgba(255 255 255 / 0.08);
 }
 
 * {
@@ -26,7 +47,7 @@ body {
 }
 
 body {
-  background: var(--launcher-white);
+  background: var(--page-bg);
   color: var(--launcher-ink);
   font-family:
     "Segoe UI Variable Display",
@@ -43,7 +64,10 @@ body {
   position: relative;
   min-height: 100dvh;
   overflow: hidden;
-  background: linear-gradient(145deg, #fbfcfe, #f3f7fb 55%, #eef5fb);
+  background: var(--page-bg);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .main-view {
@@ -192,12 +216,69 @@ button:focus-visible {
 .settings-content {
   display: flex;
   width: 100%;
-  max-width: 680px;
+  max-width: 980px;
   margin: 0 auto;
   padding-top: calc(20dvh - 42px);
   flex-direction: column;
-  align-items: center;
   gap: 22px;
+}
+
+.settings-layout {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.settings-sidebar {
+  display: flex;
+  align-self: start;
+  max-height: calc(100dvh - 190px);
+  padding: 12px;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 22px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
+}
+
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: var(--theme-item-bg);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.72);
+}
+
+.settings-nav-item:hover,
+.settings-nav-item.is-active {
+  border-color: rgb(88 169 242 / 0.38);
+  background: var(--glass-bg-blue);
+  color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.9),
+    0 8px 22px rgb(88 169 242 / 0.14);
+}
+
+.settings-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .settings-hero {
@@ -220,13 +301,29 @@ button:focus-visible {
 
 .settings-panel {
   display: flex;
-  width: min(560px, calc(100vw - 48px));
+  width: 100%;
   max-height: calc(70dvh - 20px);
   padding: 22px;
   border-radius: 26px;
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
+}
+
+.settings-wallpaper-preview {
+  width: 100%;
+  height: 150px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 0.2), rgb(20 22 26 / 0.1)),
+    var(--glass-bg-strong);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.8),
+    0 8px 24px rgb(20 22 26 / 0.08);
 }
 
 .settings-row {
@@ -263,7 +360,7 @@ button:focus-visible {
   font-weight: 700;
   letter-spacing: 0;
   outline: none;
-  box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.86);
+  box-shadow: inset 0 1px 0 var(--theme-input-highlight);
 }
 
 .settings-java-path:focus,
@@ -299,7 +396,7 @@ button:focus-visible {
   padding: 8px 12px;
   border: 1px solid var(--glass-border);
   border-radius: 16px;
-  background: rgba(255 255 255 / 0.42);
+  background: var(--theme-item-bg);
   color: var(--launcher-ink);
   font-size: 15px;
   font-weight: 700;
@@ -312,9 +409,9 @@ button:focus-visible {
   width: 44px;
   height: 26px;
   flex: 0 0 44px;
-  border: 1px solid rgb(20 22 26 / 0.14);
+  border: 1px solid var(--glass-border);
   border-radius: 999px;
-  background: rgb(20 22 26 / 0.1);
+  background: var(--theme-toggle-track);
   cursor: pointer;
   position: relative;
   transition:
@@ -395,7 +492,7 @@ button:focus-visible {
   padding: 10px 12px;
   border: 1px solid transparent;
   border-radius: 14px;
-  background: rgba(255 255 255 / 0.46);
+  background: var(--theme-item-bg);
   box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.72);
   font-family: inherit;
   text-align: left;
@@ -581,7 +678,7 @@ button:focus-visible {
   padding: 10px 12px;
   border: 1px solid transparent;
   border-radius: 12px;
-  background: rgba(255 255 255 / 0.5);
+  background: var(--theme-item-bg);
   color: var(--launcher-ink);
   font-family: inherit;
   font-size: 15px;
@@ -811,7 +908,7 @@ button:focus-visible {
   padding: 0;
   border: 1px solid var(--glass-border);
   border-radius: 18px;
-  background: rgba(255 255 255 / 0.52);
+  background: var(--theme-item-bg);
   color: var(--launcher-ink);
   cursor: pointer;
   box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.78);
@@ -824,7 +921,7 @@ button:focus-visible {
 }
 
 .corner-placeholder {
-  background: rgba(255 255 255 / 0.32);
+  background: var(--theme-placeholder-bg);
   box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.6);
   cursor: default;
   opacity: 0.72;
@@ -1024,17 +1121,42 @@ button:focus-visible {
     gap: 18px;
   }
 
+  .settings-layout {
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .settings-sidebar {
+    padding: 10px;
+    gap: 8px;
+    border-radius: 18px;
+  }
+
+  .settings-nav-item {
+    padding: 9px 10px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  .settings-main {
+    gap: 12px;
+  }
+
   .settings-hero {
     padding: 8px 20px;
     font-size: clamp(28px, 8vw, 36px);
   }
 
   .settings-panel {
-    width: calc(100vw - 32px);
+    width: 100%;
     padding: 16px;
     border-radius: 22px;
     max-height: calc(72dvh - 20px);
     gap: 14px;
+  }
+
+  .settings-wallpaper-preview {
+    height: 110px;
   }
 
   .settings-memory {

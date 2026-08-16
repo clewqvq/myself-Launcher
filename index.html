@@ -160,80 +160,129 @@
       <section class="settings-view" aria-label="设置界面">
         <div class="settings-content">
           <button class="settings-hero" type="button">设置</button>
-          <div class="settings-panel glass-surface">
-            <div class="settings-row">
-              <label class="settings-label" for="settings-java">
-                Java 路径
-              </label>
-              <div class="settings-field">
-                <input
-                  id="settings-java"
-                  class="settings-java-path"
-                  type="text"
-                  placeholder="自动检测"
-                  spellcheck="false"
-                >
-                <button
-                  class="settings-browse-button"
-                  type="button"
-                >浏览</button>
-              </div>
-            </div>
-
-            <div class="settings-row">
-              <label class="settings-label" for="settings-memory">
-                启动内存
-              </label>
-              <div class="settings-field">
-                <input
-                  id="settings-memory"
-                  class="settings-memory"
-                  type="number"
-                  min="512"
-                  max="16384"
-                  step="512"
-                  value="4096"
-                >
-                <span class="settings-unit">MB</span>
-              </div>
-            </div>
-
-            <div class="settings-row">
-              <label class="settings-label" for="settings-version">
-                默认版本
-              </label>
-              <div class="settings-field">
-                <input
-                  id="settings-version"
-                  class="settings-default-version"
-                  type="text"
-                  spellcheck="false"
-                >
-              </div>
-            </div>
-
-            <label class="settings-toggle-row">
-              <span>启动游戏后最小化启动器</span>
-              <input
-                class="settings-minimize"
-                type="checkbox"
-              >
-            </label>
-
-            <label class="settings-toggle-row">
-              <span>启动时自动选择上次文件夹</span>
-              <input
-                class="settings-auto-folder"
-                type="checkbox"
-              >
-            </label>
-
-            <div class="settings-actions">
+          <div class="settings-layout">
+            <aside class="settings-sidebar" aria-label="设置分类">
               <button
-                class="save-settings-button"
+                class="settings-nav-item is-active"
                 type="button"
-              >保存设置</button>
-              <span class="settings-status" aria-live="polite"></span>
+                data-settings-tab="general"
+              >常规</button>
+              <button
+                class="settings-nav-item"
+                type="button"
+                data-settings-tab="personalization"
+              >个性化</button>
+            </aside>
+            <div class="settings-main">
+              <div class="settings-panel glass-surface settings-general-panel">
+                <div class="settings-row">
+                  <label class="settings-label" for="settings-java">
+                    Java 路径
+                  </label>
+                  <div class="settings-field">
+                    <input
+                      id="settings-java"
+                      class="settings-java-path"
+                      type="text"
+                      placeholder="自动检测"
+                      spellcheck="false"
+                    >
+                    <button
+                      class="settings-browse-button"
+                      type="button"
+                    >浏览</button>
+                  </div>
+                </div>
+
+                <div class="settings-row">
+                  <label class="settings-label" for="settings-memory">
+                    启动内存
+                  </label>
+                  <div class="settings-field">
+                    <input
+                      id="settings-memory"
+                      class="settings-memory"
+                      type="number"
+                      min="512"
+                      max="16384"
+                      step="512"
+                      value="4096"
+                    >
+                    <span class="settings-unit">MB</span>
+                  </div>
+                </div>
+
+                <div class="settings-row">
+                  <label class="settings-label" for="settings-version">
+                    默认版本
+                  </label>
+                  <div class="settings-field">
+                    <input
+                      id="settings-version"
+                      class="settings-default-version"
+                      type="text"
+                      spellcheck="false"
+                    >
+                  </div>
+                </div>
+
+                <label class="settings-toggle-row">
+                  <span>启动游戏后最小化启动器</span>
+                  <input
+                    class="settings-minimize"
+                    type="checkbox"
+                  >
+                </label>
+
+                <label class="settings-toggle-row">
+                  <span>启动时自动选择上次文件夹</span>
+                  <input
+                    class="settings-auto-folder"
+                    type="checkbox"
+                  >
+                </label>
+              </div>
+
+              <div
+                class="settings-panel glass-surface settings-personalization-panel"
+                hidden
+              >
+                <label class="settings-toggle-row">
+                  <span>深色模式</span>
+                  <input
+                    class="settings-dark-mode"
+                    type="checkbox"
+                  >
+                </label>
+
+                <div class="settings-row">
+                  <span class="settings-label">壁纸</span>
+                  <div
+                    class="settings-wallpaper-preview"
+                    aria-hidden="true"
+                  ></div>
+                  <div class="settings-field">
+                    <input
+                      class="settings-wallpaper-path"
+                      type="text"
+                      placeholder="未设置壁纸"
+                      readonly
+                    >
+                    <button
+                      class="settings-wallpaper-button"
+                      type="button"
+                    >更换壁纸</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-actions">
+                <button
+                  class="save-settings-button"
+                  type="button"
+                >保存设置</button>
+                <span class="settings-status" aria-live="polite"></span>
+              </div>
             </div>
           </div>
         </div>
