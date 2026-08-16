@@ -21,6 +21,7 @@ let isGameRunning = false;
 let stopRequested = false;
 let premiumLoginPending = false;
 let premiumPollTimer = null;
+let launchPollTimer = null;
 let importedFolders = [];
 let selectedSourceFolder = "";
 let importedVersions = [];
@@ -368,15 +369,16 @@ async function loadAppState() {
 
   try {
     await refreshFolderState();
-    await refreshVersionState();
-    const saved = await window.pywebview.api.load_version();
-
-    if (saved && String(saved).trim()) {
-      currentVersion = String(saved).trim();
-      renderVersion(currentVersion);
-    }
-
-    await loadAccount();
+    await Promise.all([
+      refreshVersionState(),
+      window.pywebview.api.load_version().then((saved) => {
+        if (saved && String(saved).trim()) {
+          currentVersion = String(saved).trim();
+          renderVersion(currentVersion);
+        }
+      }),
+      loadAccount(),
+    ]);
   } catch {
     // Ignore transient startup failures; the UI keeps its default state.
   }
@@ -542,8 +544,10 @@ async function commitRename() {
   renameRow.classList.remove("is-editing");
   renameInput.blur();
   await saveVersion(currentVersion);
-  await refreshFolderState();
-  await refreshVersionState();
+  await Promise.all([
+    refreshFolderState(),
+    refreshVersionState(),
+  ]);
 }
 
 renameButton.addEventListener("click", startRename);
@@ -599,10 +603,12 @@ renderVersion(currentVersion);
 
 if (window.pywebview?.api?.get_imported_folders) {
   loadAppState();
+  startLaunchPolling();
 } else {
   window.addEventListener("pywebviewready", () => {
     if (window.pywebview?.api?.get_imported_folders) {
       loadAppState();
+      startLaunchPolling();
     }
   });
   loadSavedVersion();
@@ -644,7 +650,11 @@ async function handleImport() {
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
       await saveVersion(currentVersion);
-      await loadAppState();
+      await refreshFolderState();
+      await Promise.all([
+        refreshVersionState(),
+        loadAccount(),
+      ]);
       setLaunchStatus(result.message || "已导入文件夹");
     } else {
       setLaunchStatus(result.message || "导入失败", true);
@@ -749,7 +759,14 @@ async function pollLaunchStatus() {
   }
 }
 
+function startLaunchPolling() {
+  if (!window.pywebview?.api?.get_launch_status || launchPollTimer) {
+    return;
+  }
+
+  launchPollTimer = setInterval(pollLaunchStatus, 600);
+  pollLaunchStatus();
+}
+
 importButton.addEventListener("click", handleImport);
 playButton.addEventListener("click", handlePlayButton);
-
-setInterval(pollLaunchStatus, 600);

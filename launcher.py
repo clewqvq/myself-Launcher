@@ -230,12 +230,23 @@ class Api:
         self.imported_info = None
         self.launch_state = LaunchState()
         self.premium_login_state = PremiumLoginState()
+        self._config_cache = None
+        self._avatar_uri_cache = {}
+        self._account_payload_cache = None
+        self._version_cache = {}
 
     def _read_config(self):
+        if self._config_cache is not None:
+            return self._config_cache
+
         try:
-            return json.loads(self.config_path.read_text(encoding="utf-8"))
+            self._config_cache = json.loads(
+                self.config_path.read_text(encoding="utf-8")
+            )
+            return self._config_cache
         except Exception:
-            return {}
+            self._config_cache = {}
+            return self._config_cache
 
     def _write_config(self, data):
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +254,7 @@ class Api:
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        self._config_cache = data
 
     def _normalize_folder_entry(self, folder):
         folder = dict(folder)
@@ -403,26 +415,54 @@ class Api:
         data = self._read_config()
         data["account"] = account
         self._write_config(data)
+        self._account_payload_cache = None
+        self._avatar_uri_cache.clear()
+
+    def _avatar_uri(self, avatar_path):
+        path = Path(avatar_path)
+
+        try:
+            stat = path.stat()
+            key = (
+                str(path),
+                stat.st_mtime_ns,
+                stat.st_size,
+            )
+        except Exception:
+            key = str(path)
+
+        cached = self._avatar_uri_cache.get(key)
+        if cached is not None:
+            return cached
+
+        uri = _avatar_data_uri(path)
+        if not uri:
+            uri = path.as_uri()
+        self._avatar_uri_cache[key] = uri
+        return uri
 
     def _account_payload(self, account):
         if not account:
             return {"ok": True, "signed_in": False}
 
+        if self._account_payload_cache is not None:
+            return self._account_payload_cache
+
         avatar_path = account.get("avatar_path") or ""
         avatar_uri = ""
 
         if avatar_path and Path(avatar_path).exists():
-            avatar_uri = _avatar_data_uri(avatar_path)
-            if not avatar_uri:
-                avatar_uri = Path(avatar_path).as_uri()
+            avatar_uri = self._avatar_uri(avatar_path)
 
-        return {
+        payload = {
             "ok": True,
             "signed_in": True,
             "display_name": account.get("display_name") or "Player",
             "uuid": account.get("uuid") or "",
             "avatar_path": avatar_uri,
         }
+        self._account_payload_cache = payload
+        return payload
 
     def get_account_info(self):
         return self._account_payload(self._read_saved_account())
@@ -755,6 +795,12 @@ class Api:
 
     def _discover_versions(self, selected):
         selected = Path(selected).resolve()
+        cache_key = str(selected)
+        cached = self._version_cache.get(cache_key)
+
+        if cached and time.time() - cached[0] < 1:
+            return cached[1]
+
         candidates = []
 
         def add_candidate(folder):
@@ -784,6 +830,7 @@ class Api:
                 add_candidate(child)
 
         candidates.sort(key=lambda candidate: candidate[0].name.lower())
+        self._version_cache[cache_key] = (time.time(), candidates)
         return candidates
 
     def _discover_version_folder(self, selected, preferred_version=None):
