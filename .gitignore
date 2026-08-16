@@ -6,3 +6,5 @@ config.json
 *.log
 avatar.png
 launcher_profiles.json
+dist/
+preview-*.png

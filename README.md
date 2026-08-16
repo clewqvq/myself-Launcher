@@ -17,7 +17,7 @@
 
 ## 运行
 
-直接运行 `dist\MinecraftLauncher.exe`。
+使用下方打包命令生成 `dist\MinecraftLauncher.exe` 后运行。
 
 ## 打包
 
