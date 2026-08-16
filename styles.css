@@ -5,6 +5,14 @@
   --launcher-ink: #17191d;
   --launcher-muted: #6f7780;
   --launcher-button-size: 96px;
+  --accent: #58a9f2;
+  --accent-soft: rgba(88 169 242 / 0.16);
+  --glass-bg: rgba(255 255 255 / 0.58);
+  --glass-bg-strong: rgba(255 255 255 / 0.82);
+  --glass-bg-blue: rgba(232 243 255 / 0.78);
+  --glass-border: rgba(20 22 26 / 0.1);
+  --glass-highlight: rgba(255 255 255 / 0.86);
+  --glass-shadow: 0 10px 30px rgb(20 22 26 / 0.09);
 }
 
 * {
@@ -35,7 +43,7 @@ body {
   position: relative;
   min-height: 100dvh;
   overflow: hidden;
-  background: var(--launcher-white);
+  background: linear-gradient(145deg, #fbfcfe, #f3f7fb 55%, #eef5fb);
 }
 
 .main-view {
@@ -58,7 +66,7 @@ body {
   gap: 16px;
   padding: 24px;
   padding-top: 24px;
-  background: var(--launcher-white);
+  background: transparent;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -78,9 +86,15 @@ body {
 }
 
 .version-hero {
-  padding: 0;
-  border: 0;
-  background: transparent;
+  padding: 10px 24px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
   font-family: inherit;
   color: var(--launcher-ink);
   font-size: clamp(36px, 9vw, 52px);
@@ -90,6 +104,57 @@ body {
   cursor: pointer;
   transform-origin: center center;
   white-space: nowrap;
+}
+
+button {
+  appearance: none;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+button:not(.play-button):hover {
+  background: var(--glass-bg-strong);
+  border-color: rgb(88 169 242 / 0.42);
+  color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.94),
+    0 12px 32px rgb(88 169 242 / 0.16);
+  transform: translateY(-1px);
+}
+
+button:not(.play-button):active {
+  transform: translateY(0) scale(0.98);
+}
+
+button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 4px var(--accent-soft),
+    inset 0 1px 0 rgba(255 255 255 / 0.94);
+}
+
+.glass-surface {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
 }
 
 .version-content {
@@ -106,11 +171,14 @@ body {
   justify-self: start;
   max-height: calc(100dvh - 48px);
   padding: 14px;
-  border: 1px solid rgb(20 22 26 / 0.08);
-  border-radius: 18px;
-  background: rgb(248 250 252 / 0.72);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 22px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
   overflow-y: auto;
 }
 
@@ -134,9 +202,10 @@ body {
   display: block;
   width: 100%;
   padding: 10px 12px;
-  border: 0;
-  border-radius: 12px;
-  background: #eef0f2;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: rgba(255 255 255 / 0.46);
+  box-shadow: inset 0 1px 0 rgba(255 255 255 / 0.72);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -160,7 +229,18 @@ body {
 .folder-item.is-active .folder-name,
 .version-sidebar-item:hover .version-sidebar-label,
 .version-sidebar-item.is-active .version-sidebar-label {
-  color: #9fd8ff;
+  color: var(--accent);
+}
+
+.folder-item:hover,
+.folder-item.is-active,
+.version-sidebar-item:hover,
+.version-sidebar-item.is-active {
+  border-color: rgb(88 169 242 / 0.38);
+  background: var(--glass-bg-blue);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.9),
+    0 8px 22px rgb(88 169 242 / 0.14);
 }
 
 .rename-row {
@@ -172,9 +252,9 @@ body {
 
 .rename-button {
   padding: 9px 16px;
-  border: 2px solid var(--launcher-black);
-  border-radius: 12px;
-  background: var(--launcher-white);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass-bg);
   color: var(--launcher-ink);
   font-family: inherit;
   font-size: 16px;
@@ -191,9 +271,9 @@ body {
 
 .import-button {
   padding: 9px 16px;
-  border: 2px solid var(--launcher-black);
-  border-radius: 12px;
-  background: var(--launcher-white);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass-bg);
   color: var(--launcher-ink);
   font-family: inherit;
   font-size: 16px;
@@ -206,9 +286,11 @@ body {
 .rename-input {
   width: 0;
   padding: 0;
-  border: 2px solid transparent;
-  border-radius: 12px;
-  background: var(--launcher-white);
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
   color: var(--launcher-ink);
   font-family: inherit;
   font-size: 16px;
@@ -229,7 +311,11 @@ body {
 .rename-row.is-editing .rename-input {
   width: 220px;
   padding: 9px 14px;
-  border-color: var(--launcher-black);
+  border-color: rgb(88 169 242 / 0.6);
+  background: var(--glass-bg-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.9),
+    0 10px 28px rgb(88 169 242 / 0.14);
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
@@ -257,12 +343,15 @@ body {
 .avatar-wrap {
   width: 128px;
   height: 128px;
-  border-radius: 24px;
+  border-radius: 28px;
   overflow: hidden;
-  background: #f4f5f6;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
   box-shadow:
-    0 18px 46px rgb(20 22 26 / 0.12),
-    0 0 0 1px rgb(20 22 26 / 0.08);
+    inset 0 1px 0 var(--glass-highlight),
+    0 18px 46px rgb(20 22 26 / 0.12);
 }
 
 .account-menu {
@@ -271,12 +360,14 @@ body {
   display: none;
   min-width: 136px;
   padding: 8px;
-  border: 1px solid rgb(20 22 26 / 0.1);
-  border-radius: 14px;
-  background: rgb(255 255 255 / 0.96);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
   box-shadow:
-    0 18px 44px rgb(20 22 26 / 0.16),
-    0 0 0 1px rgb(20 22 26 / 0.06);
+    inset 0 1px 0 var(--glass-highlight),
+    0 18px 44px rgb(20 22 26 / 0.16);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%) scale(0.96);
@@ -297,9 +388,9 @@ body {
   display: block;
   width: 100%;
   padding: 10px 12px;
-  border: 0;
-  border-radius: 10px;
-  background: #f5f7f8;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255 255 255 / 0.5);
   color: var(--launcher-ink);
   font-family: inherit;
   font-size: 15px;
@@ -310,12 +401,14 @@ body {
   white-space: nowrap;
   transition:
     background 180ms ease,
+    border-color 180ms ease,
     color 180ms ease;
 }
 
 .verify-premium-button:hover:not(:disabled) {
-  background: #eef5ff;
-  color: #58a9f2;
+  border-color: rgb(88 169 242 / 0.4);
+  background: var(--glass-bg-blue);
+  color: var(--accent);
 }
 
 .verify-premium-button:disabled {
@@ -352,11 +445,23 @@ body {
   border: 0;
   border-radius: 50%;
   background: var(--launcher-black);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   cursor: pointer;
-  transition: transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition:
+    transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 220ms ease,
+    filter 220ms ease;
   box-shadow:
     0 18px 44px rgb(20 22 26 / 0.18),
     0 0 0 1px rgb(20 22 26 / 0.14);
+}
+
+.play-button:hover {
+  filter: brightness(1.08);
+  box-shadow:
+    0 0 0 6px rgb(88 169 242 / 0.16),
+    0 20px 52px rgb(20 22 26 / 0.24);
 }
 
 .play-button:active {
@@ -406,17 +511,29 @@ body {
   margin-left: -16px;
   padding: 10px 14px 10px 32px;
   border: 3px solid var(--launcher-black);
-  border-radius: 14px;
-  background: var(--launcher-white);
+  border-radius: 999px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
   appearance: none;
   font-family: inherit;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0;
-  color: var(--launcher-white);
-  -webkit-text-stroke: 1px var(--launcher-black);
+  color: var(--launcher-ink);
+  -webkit-text-stroke: 0;
   cursor: pointer;
   white-space: nowrap;
+}
+
+.version-name:hover {
+  background: var(--glass-bg-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.94),
+    0 14px 36px rgb(88 169 242 / 0.18);
 }
 
 .corner-tile {
@@ -425,8 +542,11 @@ body {
   bottom: 32px;
   width: 64px;
   height: 64px;
-  border-radius: 20px;
-  background: var(--launcher-black);
+  border-radius: 22px;
+  background: linear-gradient(145deg, #1c2025, #0d0f12);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 18px 40px rgb(20 22 26 / 0.2);
 }
 
 .launch-ring {
@@ -445,11 +565,11 @@ body {
 }
 
 .launch-ring-track {
-  stroke: #c2c7cd;
+  stroke: rgb(20 22 26 / 0.14);
 }
 
 .launch-ring-fill {
-  stroke: #9fd8ff;
+  stroke: var(--accent);
   stroke-dasharray: 150.796447;
   stroke-dashoffset: 150.796447;
   transform: rotate(-90deg);
@@ -462,6 +582,15 @@ body {
   left: 32px;
   bottom: 116px;
   max-width: 180px;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255 255 255 / 0.82),
+    0 10px 28px rgb(20 22 26 / 0.08);
   color: var(--launcher-ink);
   font-size: 13px;
   font-weight: 700;
@@ -489,14 +618,21 @@ body {
     padding-top: calc(33.333dvh - 36px);
   }
 
+  .version-hero {
+    padding: 8px 18px;
+    border-radius: 999px;
+  }
+
   .folder-sidebar {
     width: 150px;
     padding: 12px;
+    border-radius: 18px;
   }
 
   .version-sidebar {
     width: 140px;
     padding: 12px;
+    border-radius: 18px;
   }
 
   .profile {
@@ -511,7 +647,7 @@ body {
   .avatar-wrap {
     width: 104px;
     height: 104px;
-    border-radius: 20px;
+    border-radius: 24px;
   }
 
   .launch-row {
@@ -535,12 +671,13 @@ body {
     min-width: 0;
     margin-left: -16px;
     padding: 8px 10px 8px 26px;
-    border-radius: 12px;
+    border-radius: 999px;
     font-size: 17px;
   }
 
   .rename-input {
     font-size: 15px;
+    border-radius: 12px;
   }
 
   .rename-row.is-editing .rename-input {
@@ -559,6 +696,8 @@ body {
     left: 20px;
     bottom: 94px;
     max-width: 160px;
+    padding: 7px 10px;
+    border-radius: 12px;
     font-size: 12px;
   }
 
@@ -567,7 +706,7 @@ body {
     bottom: 20px;
     width: 56px;
     height: 56px;
-    border-radius: 18px;
+    border-radius: 20px;
   }
 }
 
@@ -575,5 +714,15 @@ body {
   .main-view,
   .version-view {
     transition: none;
+  }
+
+  button,
+  .glass-surface,
+  .launch-status {
+    transition: none;
+  }
+
+  button:not(.play-button):hover {
+    transform: none;
   }
 }
