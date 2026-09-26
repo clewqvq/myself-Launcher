@@ -13,6 +13,9 @@ const versionList = document.querySelector(".version-list");
 const downloadCenterButton = document.querySelector(
   ".download-center-button"
 );
+const mainDownloadShortcut = document.querySelector(
+  ".main-download-shortcut"
+);
 const downloadView = document.querySelector(".download-view");
 const downloadCategoryButtons = document.querySelectorAll(
   ".download-category-button"
@@ -1267,6 +1270,7 @@ renameInput.addEventListener("keydown", (event) => {
 renameInput.addEventListener("blur", commitRename);
 
 downloadCenterButton.addEventListener("click", openDownloadCenter);
+mainDownloadShortcut.addEventListener("click", openDownloadCenter);
 downloadBackButton.addEventListener("click", handleDownloadBack);
 downloadConfirmButton.addEventListener(
   "click",
