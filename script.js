@@ -10,12 +10,6 @@ const launchRingFill = document.querySelector(".launch-ring-fill");
 const launchStatus = document.querySelector(".launch-status");
 const folderList = document.querySelector(".folder-list");
 const versionList = document.querySelector(".version-list");
-const downloadCenterButton = document.querySelector(
-  ".download-center-button"
-);
-const mainDownloadShortcut = document.querySelector(
-  ".main-download-shortcut"
-);
 const downloadView = document.querySelector(".download-view");
 const downloadCategoryButtons = document.querySelectorAll(
   ".download-category-button"
@@ -71,6 +65,9 @@ const cornerMenu = document.querySelector(".corner-menu");
 const cornerPanel = document.querySelector(".corner-panel");
 const cornerSettingsButton = document.querySelector(
   ".corner-settings-button"
+);
+const cornerDownloadButton = document.querySelector(
+  ".corner-download-button"
 );
 const settingsView = document.querySelector(".settings-view");
 const settingsHero = document.querySelector(".settings-hero");
@@ -1269,8 +1266,7 @@ renameInput.addEventListener("keydown", (event) => {
 
 renameInput.addEventListener("blur", commitRename);
 
-downloadCenterButton.addEventListener("click", openDownloadCenter);
-mainDownloadShortcut.addEventListener("click", openDownloadCenter);
+cornerDownloadButton.addEventListener("click", openDownloadCenter);
 downloadBackButton.addEventListener("click", handleDownloadBack);
 downloadConfirmButton.addEventListener(
   "click",
