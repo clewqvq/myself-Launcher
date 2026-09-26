@@ -10,6 +10,52 @@ const launchRingFill = document.querySelector(".launch-ring-fill");
 const launchStatus = document.querySelector(".launch-status");
 const folderList = document.querySelector(".folder-list");
 const versionList = document.querySelector(".version-list");
+const downloadCenterButton = document.querySelector(
+  ".download-center-button"
+);
+const downloadView = document.querySelector(".download-view");
+const downloadCategoryButtons = document.querySelectorAll(
+  ".download-category-button"
+);
+const downloadBackButton = document.querySelector(
+  ".download-back-button"
+);
+const downloadTitle = document.querySelector(".download-title");
+const downloadLoading = document.querySelector(".download-loading");
+const versionCategoryList = document.querySelector(
+  ".version-category-list"
+);
+const downloadCatalogPanel = document.querySelector(
+  ".download-catalog-panel"
+);
+const downloadLoaderPanel = document.querySelector(
+  ".download-loader-panel"
+);
+const selectedDownloadVersion = document.querySelector(
+  ".selected-download-version"
+);
+const loaderOptionList = document.querySelector(".loader-option-list");
+const downloadPlaceholderPanel = document.querySelector(
+  ".download-placeholder-panel"
+);
+const downloadPlaceholderTitle = document.querySelector(
+  ".download-placeholder-title"
+);
+const downloadProgressPanel = document.querySelector(
+  ".download-progress-panel"
+);
+const downloadProgressFill = document.querySelector(
+  ".download-progress-fill"
+);
+const downloadProgressPercent = document.querySelector(
+  ".download-progress-percent"
+);
+const downloadProgressMessage = document.querySelector(
+  ".download-progress-message"
+);
+const downloadConfirmButton = document.querySelector(
+  ".download-confirm-button"
+);
 const playerName = document.querySelector(".player-name");
 const playerAvatar = document.querySelector(".player-avatar");
 const accountMenu = document.querySelector(".account-menu");
@@ -74,6 +120,12 @@ let selectedVersionId = "";
 let folderSelectPending = false;
 let versionSelectPending = false;
 let nativeBootstrapped = false;
+let downloadCatalog = [];
+let selectedDownloadCategory = "vanilla";
+let selectedDownloadVersionId = "";
+let selectedDownloadLoaderId = "";
+let downloadPollTimer = null;
+let downloadFinished = false;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -404,6 +456,334 @@ function openSettings() {
   activateSettingsTab("general");
   launcher.dataset.view = "settings";
   loadSettings();
+}
+
+const DOWNLOAD_CATEGORY_LABELS = {
+  vanilla: "原版",
+  mods: "模组",
+  shaders: "光影",
+  resourcepacks: "材质包",
+  datapacks: "数据包",
+};
+
+function formatDownloadDate(value) {
+  if (!value) {
+    return "";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value.slice(0, 10);
+  }
+
+  return parsed.toLocaleDateString("zh-CN");
+}
+
+function showDownloadPanel(panel) {
+  downloadCatalogPanel.hidden = panel !== downloadCatalogPanel;
+  downloadLoaderPanel.hidden = panel !== downloadLoaderPanel;
+  downloadPlaceholderPanel.hidden =
+    panel !== downloadPlaceholderPanel;
+  downloadProgressPanel.hidden =
+    panel !== downloadProgressPanel;
+}
+
+function renderDownloadCatalog() {
+  versionCategoryList.replaceChildren();
+  downloadLoading.classList.add("is-hidden");
+  const fragment = document.createDocumentFragment();
+
+  downloadCatalog.forEach((group, index) => {
+    const details = document.createElement("details");
+    details.className = "version-category-group";
+    details.open = index === 0;
+
+    const summary = document.createElement("summary");
+    const label = document.createElement("span");
+    label.textContent = group.label;
+    const count = document.createElement("span");
+    count.className = "version-category-count";
+    count.textContent = `${group.versions.length} 个版本`;
+    summary.append(label, count);
+
+    const list = document.createElement("div");
+    list.className = "download-version-list";
+
+    for (const version of group.versions) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "download-version-button";
+      item.dataset.versionId = version.id;
+
+      const versionLabel = document.createElement("span");
+      versionLabel.className = "download-version-id";
+      versionLabel.textContent = version.id;
+
+      const date = document.createElement("span");
+      date.className = "download-version-date";
+      date.textContent = formatDownloadDate(version.release_time);
+
+      item.append(versionLabel, date);
+      item.addEventListener("click", () => {
+        openLoaderSelection(version.id);
+      });
+      list.appendChild(item);
+    }
+
+    details.append(summary, list);
+    fragment.appendChild(details);
+  });
+
+  versionCategoryList.appendChild(fragment);
+}
+
+async function loadDownloadCatalog() {
+  if (!window.pywebview?.api?.get_minecraft_versions) {
+    downloadLoading.textContent = "请在打包后的 exe 中下载版本";
+    downloadLoading.classList.remove("is-hidden");
+    versionCategoryList.replaceChildren();
+    return;
+  }
+
+  downloadLoading.textContent = "正在读取版本列表...";
+  downloadLoading.classList.remove("is-hidden");
+
+  try {
+    const result =
+      await window.pywebview.api.get_minecraft_versions();
+
+    if (!result.ok) {
+      throw new Error(result.message || "读取版本列表失败");
+    }
+
+    downloadCatalog = Array.isArray(result.groups)
+      ? result.groups
+      : [];
+    renderDownloadCatalog();
+  } catch (error) {
+    downloadLoading.textContent =
+      error?.message || "读取版本列表失败";
+    downloadLoading.classList.remove("is-hidden");
+    versionCategoryList.replaceChildren();
+  }
+}
+
+function selectDownloadCategory(category) {
+  selectedDownloadCategory = category;
+  selectedDownloadVersionId = "";
+  selectedDownloadLoaderId = "";
+  downloadFinished = false;
+  downloadConfirmButton.hidden = true;
+  downloadConfirmButton.disabled = true;
+  downloadConfirmButton.textContent = "确定";
+
+  downloadCategoryButtons.forEach((button) => {
+    button.classList.toggle(
+      "is-active",
+      button.dataset.downloadCategory === category
+    );
+  });
+
+  const label = DOWNLOAD_CATEGORY_LABELS[category] || "下载";
+  downloadTitle.textContent = label;
+
+  if (category === "vanilla") {
+    showDownloadPanel(downloadCatalogPanel);
+    if (!downloadCatalog.length) {
+      loadDownloadCatalog();
+    }
+    return;
+  }
+
+  downloadPlaceholderTitle.textContent = label;
+  downloadPlaceholderPanel.dataset.category = category;
+  showDownloadPanel(downloadPlaceholderPanel);
+}
+
+function openDownloadCenter() {
+  closeCornerPanel();
+  closeAccountMenu();
+  launcher.dataset.view = "download";
+  selectDownloadCategory("vanilla");
+
+  if (!downloadCatalog.length) {
+    loadDownloadCatalog();
+  }
+}
+
+async function openLoaderSelection(versionId) {
+  if (!window.pywebview?.api?.get_version_loaders) {
+    return;
+  }
+
+  selectedDownloadVersionId = versionId;
+  selectedDownloadLoaderId = "";
+  selectedDownloadVersion.textContent = versionId;
+  loaderOptionList.replaceChildren();
+  downloadTitle.textContent = "选择加载器";
+  downloadConfirmButton.hidden = true;
+  downloadConfirmButton.disabled = true;
+  showDownloadPanel(downloadLoaderPanel);
+
+  const loading = document.createElement("div");
+  loading.className = "download-loading";
+  loading.textContent = "正在读取加载器...";
+  loaderOptionList.appendChild(loading);
+
+  try {
+    const result =
+      await window.pywebview.api.get_version_loaders(versionId);
+
+    if (!result.ok) {
+      throw new Error(result.message || "读取加载器失败");
+    }
+
+    loaderOptionList.replaceChildren();
+
+    for (const loader of result.loaders) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "loader-option";
+      item.dataset.loaderId = loader.id;
+
+      const name = document.createElement("strong");
+      name.textContent = loader.version
+        ? `${loader.name} ${loader.version}`
+        : loader.name;
+      const description = document.createElement("span");
+      description.textContent = loader.description || "";
+      item.append(name, description);
+
+      item.addEventListener("click", () => {
+        selectedDownloadLoaderId = loader.id;
+        loaderOptionList
+          .querySelectorAll(".loader-option")
+          .forEach((option) => {
+            option.classList.toggle(
+              "is-active",
+              option.dataset.loaderId === loader.id
+            );
+          });
+        downloadConfirmButton.hidden = false;
+        downloadConfirmButton.disabled = false;
+      });
+      loaderOptionList.appendChild(item);
+    }
+  } catch (error) {
+    loaderOptionList.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "download-loading";
+    message.textContent = error?.message || "读取加载器失败";
+    loaderOptionList.appendChild(message);
+  }
+}
+
+function updateDownloadProgress(status) {
+  const progress = Math.max(
+    0,
+    Math.min(100, Number(status.progress) || 0)
+  );
+  downloadProgressFill.style.width = `${progress}%`;
+  downloadProgressPercent.textContent = `${progress}%`;
+  downloadProgressMessage.textContent =
+    status.message || "正在下载";
+}
+
+async function pollDownloadStatus() {
+  if (!window.pywebview?.api?.get_download_status) {
+    return;
+  }
+
+  try {
+    const status =
+      await window.pywebview.api.get_download_status();
+    updateDownloadProgress(status);
+
+    if (status.error) {
+      clearInterval(downloadPollTimer);
+      downloadPollTimer = null;
+      downloadConfirmButton.hidden = false;
+      downloadConfirmButton.disabled = false;
+      downloadConfirmButton.textContent = "重试";
+      downloadFinished = false;
+      return;
+    }
+
+    if (!status.running && status.progress >= 100) {
+      clearInterval(downloadPollTimer);
+      downloadPollTimer = null;
+      downloadFinished = true;
+      downloadConfirmButton.hidden = false;
+      downloadConfirmButton.disabled = false;
+      downloadConfirmButton.textContent = "完成";
+      await loadAppState();
+    }
+  } catch {
+    // Keep polling while the native downloader is processing.
+  }
+}
+
+async function startSelectedDownload() {
+  if (downloadFinished) {
+    launcher.dataset.view = "version";
+    return;
+  }
+
+  if (
+    !selectedDownloadVersionId ||
+    !selectedDownloadLoaderId
+  ) {
+    return;
+  }
+
+  if (!window.pywebview?.api?.start_version_download) {
+    downloadProgressMessage.textContent =
+      "请在打包后的 exe 中下载版本";
+    return;
+  }
+
+  downloadConfirmButton.hidden = true;
+  showDownloadPanel(downloadProgressPanel);
+  updateDownloadProgress({
+    progress: 1,
+    message: "正在准备下载",
+  });
+
+  try {
+    const result =
+      await window.pywebview.api.start_version_download(
+        selectedDownloadVersionId,
+        selectedDownloadLoaderId
+      );
+
+    if (!result.ok) {
+      throw new Error(result.message || "无法开始下载");
+    }
+
+    clearInterval(downloadPollTimer);
+    downloadPollTimer = setInterval(pollDownloadStatus, 600);
+    pollDownloadStatus();
+  } catch (error) {
+    downloadProgressMessage.textContent =
+      error?.message || "无法开始下载";
+    downloadConfirmButton.hidden = false;
+    downloadConfirmButton.disabled = false;
+    downloadConfirmButton.textContent = "重试";
+  }
+}
+
+function handleDownloadBack() {
+  if (!downloadLoaderPanel.hidden) {
+    selectedDownloadVersionId = "";
+    selectedDownloadLoaderId = "";
+    downloadTitle.textContent =
+      DOWNLOAD_CATEGORY_LABELS[selectedDownloadCategory] || "原版";
+    downloadConfirmButton.hidden = true;
+    showDownloadPanel(downloadCatalogPanel);
+    return;
+  }
+
+  launcher.dataset.view = "version";
 }
 
 function updateVerifyButton() {
@@ -885,6 +1265,22 @@ renameInput.addEventListener("keydown", (event) => {
 });
 
 renameInput.addEventListener("blur", commitRename);
+
+downloadCenterButton.addEventListener("click", openDownloadCenter);
+downloadBackButton.addEventListener("click", handleDownloadBack);
+downloadConfirmButton.addEventListener(
+  "click",
+  startSelectedDownload
+);
+
+downloadCategoryButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (downloadPollTimer) {
+      return;
+    }
+    selectDownloadCategory(button.dataset.downloadCategory);
+  });
+});
 
 playerAvatar.addEventListener("contextmenu", (event) => {
   event.preventDefault();

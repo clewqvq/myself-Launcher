@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import webview
@@ -34,6 +37,13 @@ MINECRAFT_PROFILE_URL = "https://api.minecraftservices.com/minecraft/profile"
 MINECRAFT_ENTITLEMENTS_URL = (
     "https://api.minecraftservices.com/entitlements/mcstore"
 )
+BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
+VERSION_MANIFEST_URLS = (
+    f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+)
+
+
 class MicrosoftAuthError(RuntimeError):
     def __init__(self, message, code=""):
         super().__init__(message)
@@ -135,6 +145,98 @@ def _log_http_error(url, status, raw):
         pass
 
 
+def _network_context():
+    if certifi is None:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def _fetch_json_urls(urls, timeout=45):
+    last_error = None
+
+    for url in urls:
+        for attempt in range(2):
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "MinecraftLauncher/1.0",
+                    },
+                )
+                with urllib.request.urlopen(
+                    request,
+                    timeout=timeout,
+                    context=_network_context(),
+                ) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                    return json.loads(raw)
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    time.sleep(0.8)
+
+    raise RuntimeError(f"无法读取下载信息：{last_error}")
+
+
+def _download_urls(urls, target, sha1=""):
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists() and target.stat().st_size > 0:
+        if not sha1:
+            return str(target)
+
+        digest = hashlib.sha1(target.read_bytes()).hexdigest()
+        if digest.lower() == sha1.lower():
+            return str(target)
+
+    last_error = None
+
+    for url in urls:
+        if not url:
+            continue
+
+        for attempt in range(2):
+            part = target.with_suffix(target.suffix + ".part")
+
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "MinecraftLauncher/1.0"},
+                )
+                digest = hashlib.sha1()
+
+                with urllib.request.urlopen(
+                    request,
+                    timeout=60,
+                    context=_network_context(),
+                ) as response, open(part, "wb") as output:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        digest.update(chunk)
+
+                if sha1 and digest.hexdigest().lower() != sha1.lower():
+                    raise RuntimeError("下载文件校验失败")
+
+                os.replace(part, target)
+                return str(target)
+            except Exception as exc:
+                last_error = exc
+                try:
+                    part.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+                if attempt == 0:
+                    time.sleep(0.8)
+
+    raise RuntimeError(f"下载失败：{target.name}（{last_error}）")
+
+
 def _download_file(url, target):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +323,76 @@ class LaunchState:
             }
 
 
+class DownloadState:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.progress = 0
+        self.message = ""
+        self.error = ""
+        self.running = False
+        self.result = None
+        self.completed = 0
+        self.total = 0
+
+    def begin(self, message):
+        with self._lock:
+            self.progress = 1
+            self.message = message
+            self.error = ""
+            self.running = True
+            self.result = None
+            self.completed = 0
+            self.total = 0
+
+    def set_total(self, total):
+        with self._lock:
+            self.total = max(int(total), 1)
+            self.completed = 0
+            self.progress = max(self.progress, 3)
+
+    def advance(self, message="", amount=1):
+        with self._lock:
+            self.completed += amount
+            if self.total:
+                ratio = min(self.completed / self.total, 1)
+                self.progress = min(96, max(4, round(ratio * 90) + 6))
+            if message:
+                self.message = message
+
+    def update(self, progress, message):
+        with self._lock:
+            self.progress = max(0, min(100, int(progress)))
+            self.message = message
+
+    def finish(self, result, message):
+        with self._lock:
+            self.progress = 100
+            self.message = message
+            self.error = ""
+            self.running = False
+            self.result = result
+
+    def fail(self, error):
+        with self._lock:
+            self.progress = 0
+            self.message = "下载失败"
+            self.error = str(error)
+            self.running = False
+            self.result = None
+
+    def snapshot(self):
+        with self._lock:
+            return {
+                "progress": self.progress,
+                "message": self.message,
+                "error": self.error,
+                "running": self.running,
+                "result": self.result,
+                "completed": self.completed,
+                "total": self.total,
+            }
+
+
 class PremiumLoginState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -248,12 +420,15 @@ class Api:
         self.config_path = Path(config_path)
         self.imported_info = None
         self.launch_state = LaunchState()
+        self.download_state = DownloadState()
         self.premium_login_state = PremiumLoginState()
         self._config_cache = None
         self._avatar_uri_cache = {}
         self._wallpaper_uri_cache = {}
         self._account_payload_cache = None
         self._version_cache = {}
+        self._manifest_cache = None
+        self._manifest_cache_time = 0
 
     def _read_config(self):
         if self._config_cache is not None:
@@ -1335,6 +1510,600 @@ class Api:
             "ok": True,
             "message": f"已切换到 {info['display_name']}",
         }
+
+    def _version_manifest(self):
+        now = time.time()
+
+        if (
+            self._manifest_cache
+            and now - self._manifest_cache_time < 600
+        ):
+            return self._manifest_cache
+
+        manifest = _fetch_json_urls(VERSION_MANIFEST_URLS)
+        self._manifest_cache = manifest
+        self._manifest_cache_time = now
+        return manifest
+
+    def get_minecraft_versions(self):
+        manifest = self._version_manifest()
+        categories = (
+            ("release", "正式版"),
+            ("snapshot", "快照版"),
+            ("old_beta", "旧版 Beta"),
+            ("old_alpha", "旧版 Alpha"),
+        )
+        groups = []
+
+        for version_type, label in categories:
+            versions = [
+                {
+                    "id": item.get("id", ""),
+                    "type": item.get("type", ""),
+                    "release_time": item.get("releaseTime", ""),
+                }
+                for item in manifest.get("versions", [])
+                if item.get("type") == version_type and item.get("id")
+            ]
+            versions.sort(
+                key=lambda item: item["release_time"],
+                reverse=True,
+            )
+            groups.append(
+                {
+                    "id": version_type,
+                    "label": label,
+                    "versions": versions,
+                }
+            )
+
+        return {
+            "ok": True,
+            "source": "BMCLAPI",
+            "groups": groups,
+        }
+
+    def _fabric_loaders(self, version_id):
+        url = (
+            f"{BMCLAPI_BASE}/fabric-meta/v2/versions/loader/"
+            f"{urllib.parse.quote(version_id)}"
+        )
+        official_url = (
+            "https://meta.fabricmc.net/v2/versions/loader/"
+            f"{urllib.parse.quote(version_id)}"
+        )
+        loaders = _fetch_json_urls((url, official_url))
+        result = []
+
+        for item in loaders:
+            loader = item.get("loader") or {}
+            version = loader.get("version")
+            if not version or not loader.get("stable", True):
+                continue
+            result.append(
+                {
+                    "id": f"fabric:{version}",
+                    "name": "Fabric",
+                    "version": version,
+                    "description": "主流模组加载器，适合大多数整合包",
+                }
+            )
+            if len(result) >= 8:
+                break
+
+        return result
+
+    def get_version_loaders(self, version_id):
+        loaders = [
+            {
+                "id": "vanilla",
+                "name": "原版",
+                "version": "",
+                "description": "Minecraft 官方版本，不加载模组",
+            }
+        ]
+        warning = ""
+
+        try:
+            loaders.extend(self._fabric_loaders(version_id))
+        except Exception as exc:
+            warning = f"Fabric 加载器列表获取失败：{exc}"
+
+        return {
+            "ok": True,
+            "version_id": version_id,
+            "loaders": loaders,
+            "warning": warning,
+        }
+
+    def _download_game_root(self):
+        info = self.imported_info or self._load_imported_info()
+
+        if info and info.get("game_root"):
+            root = Path(info["game_root"])
+            if root.is_dir():
+                return root.resolve()
+
+        return (self.config_path.parent / "minecraft").resolve()
+
+    @staticmethod
+    def _library_allowed(library):
+        rules = library.get("rules")
+
+        if not rules:
+            return True
+
+        allowed = False
+
+        for rule in rules:
+            os_name = (rule.get("os") or {}).get("name")
+            if os_name and os_name != "windows":
+                continue
+            allowed = rule.get("action") == "allow"
+
+        return allowed
+
+    @staticmethod
+    def _library_path(name, classifier=""):
+        parts = str(name).split(":")
+
+        if len(parts) < 3:
+            return ""
+
+        group, artifact, version = parts[:3]
+        file_name = f"{artifact}-{version}"
+
+        if len(parts) > 3 and parts[3]:
+            file_name += f"-{parts[3]}"
+
+        if classifier:
+            file_name += f"-{classifier}"
+
+        return (
+            f"{group.replace('.', '/')}/{artifact}/{version}/"
+            f"{file_name}.jar"
+        )
+
+    def _library_jobs(self, libraries, libraries_root):
+        jobs = []
+        native_files = []
+
+        for library in libraries:
+            if not self._library_allowed(library):
+                continue
+
+            name = library.get("name", "")
+            downloads = library.get("downloads") or {}
+            artifact = downloads.get("artifact") or {}
+            classifiers = downloads.get("classifiers") or {}
+            path = artifact.get("path", "")
+
+            if not path and (artifact or not classifiers):
+                path = self._library_path(name)
+
+            if path:
+                target = libraries_root / path
+                jobs.append(
+                    {
+                        "urls": (
+                            f"{BMCLAPI_BASE}/maven/{path}",
+                            artifact.get("url", ""),
+                        ),
+                        "target": target,
+                        "sha1": artifact.get("sha1", ""),
+                        "label": f"依赖库 {target.name}",
+                    }
+                )
+
+            native_name = (library.get("natives") or {}).get("windows")
+            if not native_name:
+                continue
+
+            native_artifact = (
+                downloads.get("classifiers") or {}
+            ).get(native_name) or {}
+            native_path = (
+                native_artifact.get("path")
+                or self._library_path(name, native_name)
+            )
+
+            if not native_path:
+                continue
+
+            native_target = libraries_root / native_path
+            jobs.append(
+                {
+                    "urls": (
+                        f"{BMCLAPI_BASE}/maven/{native_path}",
+                        native_artifact.get("url", ""),
+                    ),
+                    "target": native_target,
+                    "sha1": native_artifact.get("sha1", ""),
+                    "label": f"运行库 {native_target.name}",
+                }
+            )
+            native_files.append(
+                {
+                    "path": native_target,
+                    "exclude": (library.get("extract") or {}).get(
+                        "exclude",
+                        [],
+                    ),
+                }
+            )
+
+        return jobs, native_files
+
+    def _asset_jobs(self, asset_index, assets_root):
+        jobs = []
+
+        for relative, item in (asset_index.get("objects") or {}).items():
+            digest = item.get("hash", "")
+            if len(digest) < 2:
+                continue
+            target = (
+                assets_root
+                / "objects"
+                / digest[:2]
+                / digest
+            )
+            jobs.append(
+                {
+                    "urls": (
+                        f"{BMCLAPI_BASE}/assets/{digest}",
+                        (
+                            "https://resources.download.minecraft.net/"
+                            f"{digest[:2]}/{digest}"
+                        ),
+                    ),
+                    "target": target,
+                    "sha1": digest,
+                    "label": f"资源文件 {relative}",
+                }
+            )
+
+        return jobs
+
+    @staticmethod
+    def _extract_natives(version_folder, version_id, native_files):
+        natives_dir = version_folder / f"{version_id}-natives"
+        natives_dir.mkdir(parents=True, exist_ok=True)
+        root = natives_dir.resolve()
+
+        for native in native_files:
+            archive_path = Path(native["path"])
+            if not archive_path.exists():
+                continue
+
+            with zipfile.ZipFile(archive_path) as archive:
+                for member in archive.infolist():
+                    if member.is_dir():
+                        continue
+
+                    relative = Path(member.filename)
+                    if any(
+                        relative.match(pattern)
+                        for pattern in native.get("exclude", [])
+                    ):
+                        continue
+
+                    target = (natives_dir / relative).resolve()
+                    if root != target and root not in target.parents:
+                        continue
+
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member) as source:
+                        with open(target, "wb") as output:
+                            shutil.copyfileobj(source, output)
+
+        return natives_dir
+
+    def _run_download_jobs(self, jobs, workers=10):
+        if not jobs:
+            return
+
+        self.download_state.set_total(len(jobs))
+        failures = []
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _download_urls,
+                    job["urls"],
+                    job["target"],
+                    job.get("sha1", ""),
+                ): job
+                for job in jobs
+            }
+
+            for future in as_completed(futures):
+                job = futures[future]
+                try:
+                    future.result()
+                    self.download_state.advance(job["label"])
+                except Exception as exc:
+                    failures.append(f"{job['label']}：{exc}")
+                    self.download_state.advance(job["label"])
+
+        if failures:
+            raise RuntimeError(
+                "部分文件下载失败：" + "；".join(failures[:3])
+            )
+
+    def _install_version_files(
+        self,
+        game_root,
+        version_id,
+        version_json,
+        entry,
+    ):
+        versions_root = game_root / "versions"
+        libraries_root = game_root / "libraries"
+        assets_root = game_root / "assets"
+        version_folder = versions_root / version_id
+        version_folder.mkdir(parents=True, exist_ok=True)
+
+        client = (version_json.get("downloads") or {}).get("client") or {}
+        client_target = version_folder / f"{version_id}.jar"
+        client_job = {
+            "urls": (
+                f"{BMCLAPI_BASE}/version/{version_id}/client",
+                client.get("url", ""),
+            ),
+            "target": client_target,
+            "sha1": client.get("sha1", ""),
+            "label": f"客户端 {version_id}.jar",
+        }
+
+        library_jobs, native_files = self._library_jobs(
+            version_json.get("libraries", []),
+            libraries_root,
+        )
+
+        asset_index_id = (
+            version_json.get("assets")
+            or (version_json.get("assetIndex") or {}).get("id")
+            or "legacy"
+        )
+        asset_index_data = {}
+        asset_index = version_json.get("assetIndex") or {}
+
+        if asset_index.get("url"):
+            asset_index_data = _fetch_json_urls(
+                (asset_index["url"],),
+            )
+            index_target = (
+                assets_root / "indexes" / f"{asset_index_id}.json"
+            )
+            index_target.parent.mkdir(parents=True, exist_ok=True)
+            index_target.write_text(
+                json.dumps(
+                    asset_index_data,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        asset_jobs = self._asset_jobs(
+            asset_index_data,
+            assets_root,
+        )
+        jobs = [client_job] + library_jobs + asset_jobs
+        self._run_download_jobs(jobs)
+        self._extract_natives(
+            version_folder,
+            version_id,
+            native_files,
+        )
+
+        json_target = version_folder / f"{version_id}.json"
+        json_target.write_text(
+            json.dumps(
+                version_json,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        return {
+            "version_folder": version_folder,
+            "version_json": version_json,
+            "client_target": client_target,
+            "native_files": native_files,
+        }
+
+    def _install_fabric_version(
+        self,
+        game_root,
+        base_version,
+        base_json,
+        base_entry,
+        loader_version,
+        base_native_files=None,
+    ):
+        profile_url = (
+            f"{BMCLAPI_BASE}/fabric-meta/v2/versions/loader/"
+            f"{urllib.parse.quote(base_version)}/"
+            f"{urllib.parse.quote(loader_version)}/profile/json"
+        )
+        official_url = (
+            "https://meta.fabricmc.net/v2/versions/loader/"
+            f"{urllib.parse.quote(base_version)}/"
+            f"{urllib.parse.quote(loader_version)}/profile/json"
+        )
+        profile = _fetch_json_urls((profile_url, official_url))
+        fabric_id = profile.get("id") or (
+            f"fabric-loader-{loader_version}-{base_version}"
+        )
+
+        merged = dict(base_json)
+        merged["id"] = fabric_id
+        merged["inheritsFrom"] = base_version
+        merged["mainClass"] = profile.get(
+            "mainClass",
+            base_json.get("mainClass", "net.minecraft.client.main.Main"),
+        )
+        merged["libraries"] = (
+            list(base_json.get("libraries", []))
+            + list(profile.get("libraries", []))
+        )
+        merged["releaseTime"] = profile.get(
+            "releaseTime",
+            base_json.get("releaseTime", ""),
+        )
+        merged["time"] = profile.get(
+            "time",
+            base_json.get("time", ""),
+        )
+
+        versions_root = game_root / "versions"
+        libraries_root = game_root / "libraries"
+        version_folder = versions_root / fabric_id
+        version_folder.mkdir(parents=True, exist_ok=True)
+        base_jar = versions_root / base_version / f"{base_version}.jar"
+        fabric_jar = version_folder / f"{fabric_id}.jar"
+
+        if base_jar.exists() and not fabric_jar.exists():
+            shutil.copyfile(base_jar, fabric_jar)
+
+        library_jobs, fabric_native_files = self._library_jobs(
+            profile.get("libraries", []),
+            libraries_root,
+        )
+        native_files = list(base_native_files or []) + fabric_native_files
+        self._run_download_jobs(library_jobs, workers=6)
+        self._extract_natives(
+            version_folder,
+            fabric_id,
+            native_files,
+        )
+
+        json_target = version_folder / f"{fabric_id}.json"
+        json_target.write_text(
+            json.dumps(merged, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        return fabric_id
+
+    def _register_installed_version(self, game_root, version_id):
+        info = self._build_import_info(
+            game_root,
+            version_id=version_id,
+        )
+
+        if not info:
+            return None
+
+        data = self._read_config()
+        existing = self._find_imported_entry(data, game_root)
+        info = self._prepare_folder_entry(
+            info,
+            existing,
+            selected_version_id=version_id,
+        )
+        self._upsert_imported(info)
+        self.imported_info = info
+        return info
+
+    def start_version_download(self, version_id, loader_id):
+        current = self.download_state.snapshot()
+
+        if current["running"]:
+            return {
+                "ok": False,
+                "message": "已有下载任务正在进行",
+            }
+
+        manifest = self._version_manifest()
+        entry = next(
+            (
+                item
+                for item in manifest.get("versions", [])
+                if item.get("id") == version_id
+            ),
+            None,
+        )
+
+        if not entry:
+            return {"ok": False, "message": "未找到该 Minecraft 版本"}
+
+        if loader_id != "vanilla" and not loader_id.startswith("fabric:"):
+            return {"ok": False, "message": "暂不支持该模组加载器"}
+
+        thread = threading.Thread(
+            target=self._download_worker,
+            args=(version_id, loader_id, entry),
+            daemon=True,
+        )
+        thread.start()
+        return {"ok": True, "message": "已开始下载"}
+
+    def _download_worker(self, version_id, loader_id, entry):
+        self.download_state.begin(f"正在获取 Minecraft {version_id}")
+
+        try:
+            urls = (
+                f"{BMCLAPI_BASE}/version/{version_id}/json",
+                entry.get("url", ""),
+            )
+            version_json = _fetch_json_urls(urls)
+            game_root = self._download_game_root()
+            game_root.mkdir(parents=True, exist_ok=True)
+
+            self.download_state.update(
+                5,
+                f"正在下载原版 {version_id}",
+            )
+            base_install = self._install_version_files(
+                game_root,
+                version_id,
+                version_json,
+                entry,
+            )
+
+            installed_id = version_id
+
+            if loader_id.startswith("fabric:"):
+                loader_version = loader_id.split(":", 1)[1]
+                self.download_state.update(
+                    96,
+                    f"正在安装 Fabric {loader_version}",
+                )
+                installed_id = self._install_fabric_version(
+                    game_root,
+                    version_id,
+                    version_json,
+                    entry,
+                    loader_version,
+                    base_install.get("native_files", []),
+                )
+
+            info = self._register_installed_version(
+                game_root,
+                installed_id,
+            )
+            result = {
+                "version_id": installed_id,
+                "game_root": str(game_root),
+                "source_folder": str(info.get("source_folder"))
+                if info
+                else str(game_root),
+                "display_name": info.get("display_name", installed_id)
+                if info
+                else installed_id,
+            }
+            self.download_state.finish(
+                result,
+                f"{installed_id} 下载完成",
+            )
+        except Exception as exc:
+            self.download_state.fail(exc)
+
+    def get_download_status(self):
+        return self.download_state.snapshot()
 
     def _find_java(self):
         configured_java = self._get_settings().get("java_path")

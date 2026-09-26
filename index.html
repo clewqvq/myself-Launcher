@@ -134,6 +134,30 @@
 
       <section class="version-view" aria-label="版本界面">
         <aside class="folder-sidebar" aria-label="已导入文件夹">
+          <button class="download-center-button" type="button">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5v-15Z"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5A2.5 2.5 0 0 1 4 20.5Z"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>模组下载</span>
+          </button>
           <div class="folder-list"></div>
         </aside>
         <aside class="version-sidebar" aria-label="已导入版本">
@@ -154,6 +178,102 @@
           <div class="import-row">
             <button class="import-button" type="button">导入文件夹</button>
           </div>
+        </div>
+      </section>
+
+      <section class="download-view" aria-label="模组下载界面">
+        <aside class="download-category-sidebar" aria-label="下载分类">
+          <button
+            class="download-category-button is-active"
+            type="button"
+            data-download-category="vanilla"
+          >原版</button>
+          <button
+            class="download-category-button"
+            type="button"
+            data-download-category="mods"
+          >模组</button>
+          <button
+            class="download-category-button"
+            type="button"
+            data-download-category="shaders"
+          >光影</button>
+          <button
+            class="download-category-button"
+            type="button"
+            data-download-category="resourcepacks"
+          >材质包</button>
+          <button
+            class="download-category-button"
+            type="button"
+            data-download-category="datapacks"
+          >数据包</button>
+        </aside>
+
+        <div class="download-content">
+          <div class="download-toolbar">
+            <button
+              class="download-back-button"
+              type="button"
+              aria-label="返回"
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <path
+                  d="m14.5 5-7 7 7 7"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <div class="download-heading">
+              <h2 class="download-title">原版</h2>
+              <span class="download-mirror-badge">BMCLAPI 国内镜像</span>
+            </div>
+          </div>
+
+          <div class="download-panel-stack">
+            <div class="download-catalog-panel">
+              <div class="download-loading">正在读取版本列表...</div>
+              <div class="version-category-list"></div>
+            </div>
+
+            <div class="download-loader-panel" hidden>
+              <div class="download-selected-version">
+                <span>目标版本</span>
+                <strong class="selected-download-version"></strong>
+              </div>
+              <div class="loader-option-list"></div>
+            </div>
+
+            <div class="download-placeholder-panel" hidden>
+              <div class="download-placeholder-icon" aria-hidden="true"></div>
+              <strong class="download-placeholder-title"></strong>
+            </div>
+
+            <div class="download-progress-panel" hidden>
+              <div class="download-progress-track">
+                <div class="download-progress-fill"></div>
+              </div>
+              <strong class="download-progress-percent">0%</strong>
+              <p class="download-progress-message"></p>
+            </div>
+          </div>
+
+          <button
+            class="download-confirm-button"
+            type="button"
+            disabled
+            hidden
+          >确定</button>
         </div>
       </section>
 
