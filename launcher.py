@@ -634,6 +634,32 @@ class Api:
     def get_account_info(self):
         return self._account_payload(self._read_saved_account())
 
+    def logout_account(self):
+        data = self._read_config()
+        account = data.pop("account", None)
+        self._write_config(data)
+        self._account_payload_cache = None
+        self._avatar_uri_cache.clear()
+
+        avatar_path = ""
+        if isinstance(account, dict):
+            avatar_path = account.get("avatar_path") or ""
+
+        if avatar_path:
+            try:
+                path = Path(avatar_path).resolve()
+                if path.parent == self.config_path.parent.resolve():
+                    path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        self._set_premium_state("idle", "已退出正版账号")
+        return {
+            "ok": True,
+            "signed_in": False,
+            "message": "已退出正版账号",
+        }
+
     def _friendly_auth_error(self, exc):
         text = str(exc)
 

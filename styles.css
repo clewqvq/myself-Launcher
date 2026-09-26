@@ -197,6 +197,7 @@ button:focus-visible {
   background: transparent;
   opacity: 0;
   pointer-events: none;
+  transform: translateY(18px);
   transition:
     opacity 420ms ease,
     transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -211,6 +212,7 @@ button:focus-visible {
 .launcher[data-view="settings"] .settings-view {
   opacity: 1;
   pointer-events: auto;
+  transform: translateY(0);
 }
 
 .settings-content {
@@ -502,6 +504,12 @@ button:focus-visible {
   font-family: inherit;
   text-align: left;
   cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 180ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
 .folder-name,
@@ -534,6 +542,16 @@ button:focus-visible {
   box-shadow:
     inset 0 1px 0 rgba(255 255 255 / 0.9),
     0 8px 22px rgb(88 169 242 / 0.14);
+}
+
+.folder-item:active,
+.version-sidebar-item:active {
+  transform: scale(0.98);
+}
+
+.folder-item.is-busy,
+.version-sidebar-item.is-busy {
+  opacity: 0.72;
 }
 
 .rename-row {
@@ -634,6 +652,7 @@ button:focus-visible {
 }
 
 .avatar-wrap {
+  position: relative;
   width: 128px;
   height: 128px;
   border-radius: 28px;
@@ -642,8 +661,12 @@ button:focus-visible {
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(20px) saturate(1.5);
   backdrop-filter: blur(20px) saturate(1.5);
+  outline: 2px solid rgb(88 169 242 / 0.72);
+  outline-offset: 5px;
   box-shadow:
     inset 0 1px 0 var(--glass-highlight),
+    0 0 0 1px rgb(255 255 255 / 0.55),
+    0 0 30px rgb(88 169 242 / 0.42),
     0 18px 46px rgb(20 22 26 / 0.12);
 }
 
@@ -696,6 +719,43 @@ button:focus-visible {
     background 180ms ease,
     border-color 180ms ease,
     color 180ms ease;
+}
+
+.logout-account-button {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--theme-item-bg);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.logout-account-button:hover:not(:disabled) {
+  border-color: rgb(88 169 242 / 0.4);
+  background: var(--glass-bg-blue);
+  color: var(--accent);
+}
+
+.logout-account-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.logout-account-button[hidden] {
+  display: none !important;
 }
 
 .verify-premium-button:hover:not(:disabled) {
@@ -1181,13 +1241,27 @@ button:focus-visible {
   .main-view,
   .version-view,
   .settings-view,
-  .corner-panel {
+  .corner-panel,
+  .folder-item,
+  .folder-name,
+  .version-sidebar-item,
+  .version-sidebar-label,
+  .rename-input,
+  .account-menu,
+  .settings-toggle-row input,
+  .settings-toggle-row input::after,
+  .launch-ring-fill,
+  .play-button,
+  .play-triangle,
+  .triangle-shape,
+  .stop-icon {
     transition: none;
   }
 
   button,
   .glass-surface,
-  .launch-status {
+  .launch-status,
+  .version-name {
     transition: none;
   }
 

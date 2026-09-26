@@ -14,6 +14,9 @@ const playerName = document.querySelector(".player-name");
 const playerAvatar = document.querySelector(".player-avatar");
 const accountMenu = document.querySelector(".account-menu");
 const verifyPremiumButton = document.querySelector(".verify-premium-button");
+const logoutAccountButton = document.querySelector(
+  ".logout-account-button"
+);
 const cornerTile = document.querySelector(".corner-tile");
 const cornerMenu = document.querySelector(".corner-menu");
 const cornerPanel = document.querySelector(".corner-panel");
@@ -68,6 +71,9 @@ let importedFolders = [];
 let selectedSourceFolder = "";
 let importedVersions = [];
 let selectedVersionId = "";
+let folderSelectPending = false;
+let versionSelectPending = false;
+let nativeBootstrapped = false;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -134,9 +140,11 @@ function renderAccount(account) {
   if (account?.signed_in) {
     playerName.textContent = account.display_name || "Player";
     renderPremiumAvatar(account.avatar_path || "assets/player-avatar.png");
+    logoutAccountButton.hidden = false;
   } else {
     playerName.textContent = "Steve";
     playerAvatar.src = "assets/player-avatar.png";
+    logoutAccountButton.hidden = true;
   }
 }
 
@@ -211,6 +219,14 @@ function openAccountMenu() {
   positionAccountMenu();
   accountMenu.classList.add("is-open");
   requestAnimationFrame(() => positionAccountMenu());
+}
+
+function toggleAccountMenu() {
+  if (accountMenu.classList.contains("is-open")) {
+    closeAccountMenu();
+  } else {
+    openAccountMenu();
+  }
 }
 
 function closeAccountMenu() {
@@ -429,6 +445,33 @@ async function handlePremiumLogin() {
   }
 }
 
+async function handleLogoutAccount() {
+  if (!window.pywebview?.api?.logout_account) {
+    setLaunchStatus("请在打包后的 exe 中退出账号", true);
+    return;
+  }
+
+  logoutAccountButton.disabled = true;
+  logoutAccountButton.textContent = "退出中...";
+
+  try {
+    const result = await window.pywebview.api.logout_account();
+
+    if (result.ok) {
+      renderAccount({ signed_in: false });
+      closeAccountMenu();
+      setLaunchStatus(result.message || "已退出正版账号");
+    } else {
+      setLaunchStatus(result.message || "退出账号失败", true);
+    }
+  } catch (error) {
+    setLaunchStatus(error?.message || "退出账号失败", true);
+  } finally {
+    logoutAccountButton.disabled = false;
+    logoutAccountButton.textContent = "退出账号";
+  }
+}
+
 function startPremiumStatusPolling() {
   clearInterval(premiumPollTimer);
 
@@ -468,38 +511,70 @@ function startPremiumStatusPolling() {
   }, 1500);
 }
 
+function createSidebarItem({
+  className,
+  labelClass,
+  label,
+  title = "",
+  dataset = {},
+  active = false,
+  busy = false,
+  onClick,
+}) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = className;
+  item.title = title;
+
+  if (active) {
+    item.classList.add("is-active");
+  }
+
+  if (busy) {
+    item.classList.add("is-busy");
+  }
+
+  Object.entries(dataset).forEach(([key, value]) => {
+    item.dataset[key] = value;
+  });
+
+  const labelNode = document.createElement("span");
+  labelNode.className = labelClass;
+  labelNode.textContent = label;
+  item.appendChild(labelNode);
+  item.addEventListener("click", onClick);
+  return item;
+}
+
 function renderFolderSidebar() {
   if (!folderList) {
     return;
   }
 
   folderList.replaceChildren();
+  folderList.toggleAttribute("aria-busy", folderSelectPending);
 
   for (const folder of importedFolders) {
     if (!folder.source_folder) {
       continue;
     }
 
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "folder-item";
-    item.dataset.sourceFolder = folder.source_folder;
-
-    const name = document.createElement("span");
-    name.className = "folder-name";
-    name.textContent =
+    const label =
       folder.folder_name ||
       folder.display_name ||
       folder.version_id ||
       folder.source_folder;
-    item.appendChild(name);
-
-    if (folder.source_folder === selectedSourceFolder) {
-      item.classList.add("is-active");
-    }
-
-    item.addEventListener("click", () => {
-      handleFolderSelect(folder.source_folder);
+    const item = createSidebarItem({
+      className: "folder-item",
+      labelClass: "folder-name",
+      label,
+      title: folder.source_folder,
+      dataset: { sourceFolder: folder.source_folder },
+      active: folder.source_folder === selectedSourceFolder,
+      busy:
+        folderSelectPending &&
+        folder.source_folder === selectedSourceFolder,
+      onClick: () => handleFolderSelect(folder.source_folder),
     });
     folderList.appendChild(item);
   }
@@ -511,29 +586,24 @@ function renderVersionSidebar() {
   }
 
   versionList.replaceChildren();
+  versionList.toggleAttribute("aria-busy", versionSelectPending);
 
   for (const version of importedVersions) {
     if (!version.version_id) {
       continue;
     }
 
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "version-sidebar-item";
-    item.dataset.versionId = version.version_id;
-
-    const label = document.createElement("span");
-    label.className = "version-sidebar-label";
-    label.textContent =
-      version.display_name || version.version_id;
-    item.appendChild(label);
-
-    if (version.version_id === selectedVersionId) {
-      item.classList.add("is-active");
-    }
-
-    item.addEventListener("click", () => {
-      handleVersionSelect(version.version_id);
+    const item = createSidebarItem({
+      className: "version-sidebar-item",
+      labelClass: "version-sidebar-label",
+      label: version.display_name || version.version_id,
+      title: version.version_folder || version.version_id,
+      dataset: { versionId: version.version_id },
+      active: version.version_id === selectedVersionId,
+      busy:
+        versionSelectPending &&
+        version.version_id === selectedVersionId,
+      onClick: () => handleVersionSelect(version.version_id),
     });
     versionList.appendChild(item);
   }
@@ -604,10 +674,17 @@ async function handleVersionSelect(versionId) {
   if (
     !window.pywebview?.api?.select_version ||
     !selectedSourceFolder ||
-    !versionId
+    !versionId ||
+    versionSelectPending ||
+    folderSelectPending
   ) {
     return;
   }
+
+  const previousVersionId = selectedVersionId;
+  versionSelectPending = true;
+  selectedVersionId = versionId;
+  renderVersionSidebar();
 
   if (isEditing) {
     isEditing = false;
@@ -624,23 +701,41 @@ async function handleVersionSelect(versionId) {
     );
 
     if (result.ok) {
+      versionSelectPending = false;
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
+      renderVersionSidebar();
       await refreshVersionState();
       setLaunchStatus(result.message || "已切换版本");
     } else {
+      versionSelectPending = false;
+      selectedVersionId = previousVersionId;
+      renderVersionSidebar();
       setLaunchStatus(result.message || "未找到游戏版本", true);
     }
   } catch (error) {
+    versionSelectPending = false;
+    selectedVersionId = previousVersionId;
+    renderVersionSidebar();
     setLaunchStatus(error?.message || "切换版本失败", true);
   }
 }
 
 async function handleFolderSelect(sourceFolder) {
-  if (!window.pywebview?.api?.select_folder || !sourceFolder) {
+  if (
+    !window.pywebview?.api?.select_folder ||
+    !sourceFolder ||
+    folderSelectPending ||
+    versionSelectPending
+  ) {
     return;
   }
+
+  const previousSourceFolder = selectedSourceFolder;
+  folderSelectPending = true;
+  selectedSourceFolder = sourceFolder;
+  renderFolderSidebar();
 
   if (isEditing) {
     isEditing = false;
@@ -654,17 +749,27 @@ async function handleFolderSelect(sourceFolder) {
     const result = await window.pywebview.api.select_folder(sourceFolder);
 
     if (result.ok) {
+      folderSelectPending = false;
       selectedSourceFolder = result.source_folder || sourceFolder;
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
-      await refreshFolderState();
-      await refreshVersionState();
+      renderFolderSidebar();
+      await Promise.all([
+        refreshFolderState(),
+        refreshVersionState(),
+      ]);
       setLaunchStatus(result.message || "已切换文件夹");
     } else {
+      folderSelectPending = false;
+      selectedSourceFolder = previousSourceFolder;
+      renderFolderSidebar();
       setLaunchStatus(result.message || "未找到游戏文件", true);
     }
   } catch (error) {
+    folderSelectPending = false;
+    selectedSourceFolder = previousSourceFolder;
+    renderFolderSidebar();
     setLaunchStatus(error?.message || "切换失败", true);
   }
 }
@@ -786,9 +891,17 @@ playerAvatar.addEventListener("contextmenu", (event) => {
   openAccountMenu();
 });
 
+playerAvatar.addEventListener("click", () => {
+  toggleAccountMenu();
+});
+
 verifyPremiumButton.addEventListener("click", () => {
   closeAccountMenu();
   handlePremiumLogin();
+});
+
+logoutAccountButton.addEventListener("click", () => {
+  handleLogoutAccount();
 });
 
 cornerMenu.addEventListener("mouseenter", openCornerPanel);
@@ -869,21 +982,28 @@ window.addEventListener("resize", () => {
 
 renderVersion(currentVersion);
 
-if (window.pywebview?.api?.get_imported_folders) {
-  loadAppState();
-  loadSettings();
+async function bootstrapNative() {
+  if (nativeBootstrapped || !window.pywebview?.api?.get_imported_folders) {
+    return;
+  }
+
+  nativeBootstrapped = true;
+  await Promise.all([loadAppState(), loadSettings()]);
   startLaunchPolling();
-} else {
-  window.addEventListener("pywebviewready", () => {
-    if (window.pywebview?.api?.get_imported_folders) {
-      loadAppState();
-      loadSettings();
-      startLaunchPolling();
-    }
-  });
+}
+
+function bootstrapApp() {
+  if (window.pywebview?.api?.get_imported_folders) {
+    bootstrapNative();
+    return;
+  }
+
+  window.addEventListener("pywebviewready", bootstrapNative);
   loadSavedVersion();
   loadSettings();
 }
+
+bootstrapApp();
 
 function setLaunchStatus(message, isError = false) {
   if (message) {
