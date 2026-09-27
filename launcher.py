@@ -2,6 +2,8 @@ import base64
 import hashlib
 import json
 import os
+import platform
+import re
 import shutil
 import ssl
 import subprocess
@@ -39,6 +41,10 @@ MINECRAFT_ENTITLEMENTS_URL = (
     "https://api.minecraftservices.com/entitlements/mcstore"
 )
 BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
+JAVA_RUNTIME_MANIFEST_URL = (
+    "https://launchermeta.mojang.com/v1/products/java-runtime/"
+    "2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
+)
 VERSION_MANIFEST_URLS = (
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
     f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
@@ -1947,13 +1953,14 @@ class Api:
             f"正在获取 Fabric {loader_version} 配置",
         )
         profile = _fetch_json_urls((official_url, profile_url))
-        fabric_id = profile.get("id") or (
+        generated_fabric_id = profile.get("id") or (
             f"fabric-loader-{loader_version}-{base_version}"
         )
 
         merged = dict(base_json)
-        merged["id"] = fabric_id
+        merged["id"] = base_version
         merged["inheritsFrom"] = base_version
+        merged["fabricLoaderVersion"] = loader_version
         merged["mainClass"] = profile.get(
             "mainClass",
             base_json.get("mainClass", "net.minecraft.client.main.Main"),
@@ -1973,13 +1980,8 @@ class Api:
 
         versions_root = game_root / "versions"
         libraries_root = game_root / "libraries"
-        version_folder = versions_root / fabric_id
+        version_folder = versions_root / base_version
         version_folder.mkdir(parents=True, exist_ok=True)
-        base_jar = versions_root / base_version / f"{base_version}.jar"
-        fabric_jar = version_folder / f"{fabric_id}.jar"
-
-        if base_jar.exists() and not fabric_jar.exists():
-            shutil.copyfile(base_jar, fabric_jar)
 
         library_jobs, fabric_native_files = self._library_jobs(
             profile.get("libraries", []),
@@ -1993,21 +1995,71 @@ class Api:
         self._run_download_jobs(library_jobs, workers=6)
         self._extract_natives(
             version_folder,
-            fabric_id,
+            base_version,
             native_files,
         )
 
-        json_target = version_folder / f"{fabric_id}.json"
+        json_target = version_folder / f"{base_version}.json"
         json_target.write_text(
             json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+        generated_folder = versions_root / generated_fabric_id
+        versions_root_resolved = versions_root.resolve()
+        generated_resolved = generated_folder.resolve()
+        if (
+            generated_folder != version_folder
+            and generated_folder.is_dir()
+            and generated_resolved.parent == versions_root_resolved
+        ):
+            allowed_names = {
+                f"{generated_fabric_id}.json",
+                f"{generated_fabric_id}.jar",
+                f"{generated_fabric_id}-natives",
+            }
+            migratable_names = {
+                "mods",
+                "config",
+                "saves",
+                "shaderpacks",
+                "resourcepacks",
+                ".fabric",
+                "logs",
+            }
+            can_remove = True
+
+            for entry in generated_folder.iterdir():
+                if entry.name in allowed_names:
+                    continue
+
+                if entry.name not in migratable_names:
+                    can_remove = False
+                    continue
+
+                target = version_folder / entry.name
+                target.mkdir(parents=True, exist_ok=True)
+
+                for child in entry.iterdir():
+                    child_target = target / child.name
+                    if child.is_dir():
+                        shutil.copytree(
+                            child,
+                            child_target,
+                            dirs_exist_ok=True,
+                        )
+                    elif not child_target.exists():
+                        shutil.copy2(child, child_target)
+
+            if can_remove:
+                shutil.rmtree(generated_folder)
+
         self.download_state.update(
             97,
             "正在注册 Fabric 版本",
         )
 
-        return fabric_id
+        return base_version
 
     def _register_installed_version(self, game_root, version_id):
         info = self._build_import_info(
@@ -2088,6 +2140,16 @@ class Api:
                 entry,
             )
 
+            java_config = version_json.get("javaVersion") or {}
+            required_java = int(
+                java_config.get("majorVersion") or 0
+            )
+            if required_java:
+                self._ensure_java_runtime(
+                    java_config.get("component", ""),
+                    required_java,
+                )
+
             installed_id = version_id
 
             if loader_id.startswith("fabric:"):
@@ -2148,10 +2210,144 @@ class Api:
     def get_download_status(self):
         return self.download_state.snapshot()
 
-    def _find_java(self):
+    def _java_major_version(self, java_path):
+        try:
+            result = subprocess.run(
+                [str(java_path), "-version"],
+                capture_output=True,
+                timeout=8,
+                creationflags=0,
+            )
+            output = (
+                result.stdout + result.stderr
+            ).decode("utf-8", errors="replace")
+            match = re.search(
+                r'version "(\d+)(?:\.(\d+))?',
+                output,
+            )
+
+            if not match:
+                return 0
+
+            major = int(match.group(1))
+            if major == 1 and match.group(2):
+                return int(match.group(2))
+            return major
+        except Exception:
+            return 0
+
+    def _ensure_java_runtime(self, component, required_major):
+        if not required_major:
+            return None
+
+        runtime_root = (
+            self.config_path.parent
+            / "runtime"
+            / (component or f"java-{required_major}")
+        )
+        java_path = runtime_root / "bin" / "java.exe"
+
+        if (
+            java_path.exists()
+            and self._java_major_version(java_path) >= required_major
+        ):
+            return java_path
+
+        component_name = component or {
+            8: "java-runtime-alpha",
+            16: "java-runtime-beta",
+            17: "java-runtime-gamma",
+            21: "java-runtime-delta",
+            25: "java-runtime-epsilon",
+        }.get(required_major, "")
+
+        if not component_name:
+            raise RuntimeError(
+                f"未找到 Java {required_major} 的自动安装配置"
+            )
+
+        runtime_manifest = _fetch_json_urls(
+            (JAVA_RUNTIME_MANIFEST_URL,),
+        )
+        platform_key = (
+            "windows-arm64"
+            if platform.machine().lower() in ("arm64", "aarch64")
+            else "windows-x64"
+        )
+        entries = (
+            runtime_manifest.get(platform_key, {})
+            .get(component_name, [])
+        )
+
+        if not entries:
+            raise RuntimeError(
+                f"当前平台没有可用的 Java {required_major} 运行时"
+            )
+
+        entry = entries[0]
+        manifest_url = (
+            (entry.get("manifest") or {}).get("url", "")
+        )
+
+        if not manifest_url:
+            raise RuntimeError(
+                f"Java {required_major} 运行时清单地址无效"
+            )
+
+        runtime_files = _fetch_json_urls((manifest_url,))
+        jobs = []
+        root = runtime_root.resolve()
+
+        for relative_name, item in (
+            runtime_files.get("files") or {}
+        ).items():
+            if item.get("type") != "file":
+                continue
+
+            raw = (item.get("downloads") or {}).get("raw") or {}
+            if not raw.get("url"):
+                continue
+
+            relative = Path(relative_name)
+            target = (runtime_root / relative).resolve()
+            if root != target and root not in target.parents:
+                continue
+
+            jobs.append(
+                {
+                    "urls": (raw["url"],),
+                    "target": target,
+                    "sha1": raw.get("sha1", ""),
+                    "label": f"Java 运行时 {relative.name}",
+                }
+            )
+
+        self.download_state.update(
+            96,
+            f"正在准备 Java {required_major} 运行时",
+        )
+        self._run_download_jobs(jobs, workers=32)
+
+        if (
+            not java_path.exists()
+            or self._java_major_version(java_path) < required_major
+        ):
+            raise RuntimeError(
+                f"Java {required_major} 运行时安装失败"
+            )
+
+        return java_path
+
+    def _find_java(self, required_major=0):
         configured_java = self._get_settings().get("java_path")
         if configured_java and Path(configured_java).exists():
-            return Path(configured_java)
+            configured_path = Path(configured_java)
+            if (
+                not required_major
+                or self._java_major_version(configured_path)
+                >= required_major
+            ):
+                return configured_path
 
         candidates = [
             Path(r"I:\hmcl\bin\javaw.exe"),
@@ -2162,11 +2358,29 @@ class Api:
         ]
 
         for candidate in candidates:
-            if candidate.exists():
+            if candidate.exists() and (
+                not required_major
+                or self._java_major_version(candidate)
+                >= required_major
+            ):
                 return candidate
 
+        if required_major:
+            runtime = self._ensure_java_runtime("", required_major)
+            if runtime:
+                return runtime
+
         which = shutil.which("javaw") or shutil.which("java")
-        return Path(which) if which else None
+        if not which:
+            return None
+
+        fallback = Path(which)
+        if required_major and self._java_major_version(
+            fallback
+        ) < required_major:
+            return None
+
+        return fallback
 
     def _build_launch_command(self, info):
         version_json = json.loads(
@@ -2204,7 +2418,13 @@ class Api:
 
             classpath.append(str(library_file))
 
-        java = self._find_java()
+        required_java = int(
+            (version_json.get("javaVersion") or {}).get(
+                "majorVersion"
+            )
+            or 0
+        )
+        java = self._find_java(required_java)
         if not java:
             raise RuntimeError("未找到可用的 Java")
 
