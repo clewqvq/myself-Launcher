@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,8 +40,8 @@ MINECRAFT_ENTITLEMENTS_URL = (
 )
 BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
 VERSION_MANIFEST_URLS = (
-    f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+    f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
 )
 
 
@@ -151,7 +152,7 @@ def _network_context():
     return ssl.create_default_context(cafile=certifi.where())
 
 
-def _fetch_json_urls(urls, timeout=45):
+def _fetch_json_urls(urls, timeout=12):
     last_error = None
 
     for url in urls:
@@ -355,7 +356,11 @@ class DownloadState:
             self.completed += amount
             if self.total:
                 ratio = min(self.completed / self.total, 1)
-                self.progress = min(96, max(4, round(ratio * 90) + 6))
+                next_progress = min(
+                    96,
+                    max(4, round(ratio * 90) + 6),
+                )
+                self.progress = max(self.progress, next_progress)
             if message:
                 self.message = message
 
@@ -1564,15 +1569,15 @@ class Api:
         }
 
     def _fabric_loaders(self, version_id):
-        url = (
-            f"{BMCLAPI_BASE}/fabric-meta/v2/versions/loader/"
-            f"{urllib.parse.quote(version_id)}"
-        )
         official_url = (
             "https://meta.fabricmc.net/v2/versions/loader/"
             f"{urllib.parse.quote(version_id)}"
         )
-        loaders = _fetch_json_urls((url, official_url))
+        mirror_url = (
+            f"{BMCLAPI_BASE}/fabric-meta/v2/versions/loader/"
+            f"{urllib.parse.quote(version_id)}"
+        )
+        loaders = _fetch_json_urls((official_url, mirror_url))
         result = []
 
         for item in loaders:
@@ -1802,6 +1807,10 @@ class Api:
         if not jobs:
             return
 
+        unique_jobs = {}
+        for job in jobs:
+            unique_jobs.setdefault(str(job["target"]), job)
+        jobs = list(unique_jobs.values())
         self.download_state.set_total(len(jobs))
         failures = []
 
@@ -1890,7 +1899,7 @@ class Api:
             assets_root,
         )
         jobs = [client_job] + library_jobs + asset_jobs
-        self._run_download_jobs(jobs)
+        self._run_download_jobs(jobs, workers=48)
         self._extract_natives(
             version_folder,
             version_id,
@@ -1933,7 +1942,11 @@ class Api:
             f"{urllib.parse.quote(base_version)}/"
             f"{urllib.parse.quote(loader_version)}/profile/json"
         )
-        profile = _fetch_json_urls((profile_url, official_url))
+        self.download_state.update(
+            96,
+            f"正在获取 Fabric {loader_version} 配置",
+        )
+        profile = _fetch_json_urls((official_url, profile_url))
         fabric_id = profile.get("id") or (
             f"fabric-loader-{loader_version}-{base_version}"
         )
@@ -1973,6 +1986,10 @@ class Api:
             libraries_root,
         )
         native_files = list(base_native_files or []) + fabric_native_files
+        self.download_state.update(
+            96,
+            f"正在安装 Fabric {loader_version} 依赖",
+        )
         self._run_download_jobs(library_jobs, workers=6)
         self._extract_natives(
             version_folder,
@@ -1984,6 +2001,10 @@ class Api:
         json_target.write_text(
             json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
+        )
+        self.download_state.update(
+            97,
+            "正在注册 Fabric 版本",
         )
 
         return fabric_id
@@ -2017,37 +2038,40 @@ class Api:
                 "message": "已有下载任务正在进行",
             }
 
-        manifest = self._version_manifest()
-        entry = next(
-            (
-                item
-                for item in manifest.get("versions", [])
-                if item.get("id") == version_id
-            ),
-            None,
-        )
-
-        if not entry:
-            return {"ok": False, "message": "未找到该 Minecraft 版本"}
+        if not version_id:
+            return {"ok": False, "message": "未选择 Minecraft 版本"}
 
         if loader_id != "vanilla" and not loader_id.startswith("fabric:"):
             return {"ok": False, "message": "暂不支持该模组加载器"}
 
         thread = threading.Thread(
             target=self._download_worker,
-            args=(version_id, loader_id, entry),
+            args=(version_id, loader_id),
             daemon=True,
         )
         thread.start()
         return {"ok": True, "message": "已开始下载"}
 
-    def _download_worker(self, version_id, loader_id, entry):
+    def _download_worker(self, version_id, loader_id):
         self.download_state.begin(f"正在获取 Minecraft {version_id}")
 
         try:
+            manifest = self._version_manifest()
+            entry = next(
+                (
+                    item
+                    for item in manifest.get("versions", [])
+                    if item.get("id") == version_id
+                ),
+                None,
+            )
+
+            if not entry:
+                raise RuntimeError("未找到该 Minecraft 版本")
+
             urls = (
-                f"{BMCLAPI_BASE}/version/{version_id}/json",
                 entry.get("url", ""),
+                f"{BMCLAPI_BASE}/version/{version_id}/json",
             )
             version_json = _fetch_json_urls(urls)
             game_root = self._download_game_root()
@@ -2100,6 +2124,25 @@ class Api:
                 f"{installed_id} 下载完成",
             )
         except Exception as exc:
+            try:
+                log_path = (
+                    self.config_path.parent / "logs" / "download.log"
+                )
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(
+                    log_path,
+                    "a",
+                    encoding="utf-8",
+                    errors="replace",
+                ) as log:
+                    log.write(
+                        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                        f"{version_id} / {loader_id}\n"
+                    )
+                    log.write(traceback.format_exc())
+                    log.write("\n")
+            except Exception:
+                pass
             self.download_state.fail(exc)
 
     def get_download_status(self):
