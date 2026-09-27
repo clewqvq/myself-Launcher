@@ -7,6 +7,7 @@ const renameInput = document.querySelector(".rename-input");
 const importButton = document.querySelector(".import-button");
 const playButton = document.querySelector(".play-button");
 const launchRingFill = document.querySelector(".launch-ring-fill");
+const launchRingButton = document.querySelector(".launch-ring-button");
 const launchStatus = document.querySelector(".launch-status");
 const folderList = document.querySelector(".folder-list");
 const versionList = document.querySelector(".version-list");
@@ -126,6 +127,9 @@ let selectedDownloadVersionId = "";
 let selectedDownloadLoaderId = "";
 let downloadPollTimer = null;
 let downloadFinished = false;
+let activeDownloadTask = null;
+let downloadRingVisible = false;
+let downloadRingResetTimer = null;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -689,6 +693,51 @@ function updateDownloadProgress(status) {
     status.message || "正在下载";
 }
 
+function scheduleDownloadRingReset() {
+  clearTimeout(downloadRingResetTimer);
+  downloadRingResetTimer = setTimeout(() => {
+    downloadRingVisible = false;
+    updateLaunchRing(0);
+  }, 5000);
+}
+
+function syncDownloadRing(status) {
+  activeDownloadTask = status;
+  downloadRingVisible = true;
+  clearTimeout(downloadRingResetTimer);
+  updateLaunchRing(status.progress || 0);
+  launchRingButton.classList.toggle(
+    "is-active",
+    Boolean(status.running)
+  );
+
+  if (!status.running) {
+    scheduleDownloadRingReset();
+  }
+}
+
+function openDownloadTaskView() {
+  if (!activeDownloadTask) {
+    return;
+  }
+
+  closeCornerPanel();
+  closeAccountMenu();
+  launcher.dataset.view = "download";
+  showDownloadPanel(downloadProgressPanel);
+  updateDownloadProgress(activeDownloadTask);
+  downloadConfirmButton.hidden = Boolean(activeDownloadTask.running);
+  downloadConfirmButton.disabled = Boolean(activeDownloadTask.running);
+
+  if (!activeDownloadTask.running && activeDownloadTask.progress >= 100) {
+    downloadFinished = true;
+    downloadConfirmButton.textContent = "完成";
+  } else if (activeDownloadTask.error) {
+    downloadFinished = false;
+    downloadConfirmButton.textContent = "重试";
+  }
+}
+
 async function pollDownloadStatus() {
   if (!window.pywebview?.api?.get_download_status) {
     return;
@@ -698,6 +747,8 @@ async function pollDownloadStatus() {
     const status =
       await window.pywebview.api.get_download_status();
     updateDownloadProgress(status);
+    syncDownloadRing(status);
+    setLaunchStatus(status.error || status.message || "正在下载", Boolean(status.error));
 
     if (status.error) {
       clearInterval(downloadPollTimer);
@@ -725,7 +776,7 @@ async function pollDownloadStatus() {
 
 async function startSelectedDownload() {
   if (downloadFinished) {
-    launcher.dataset.view = "version";
+    launcher.dataset.view = "home";
     return;
   }
 
@@ -747,6 +798,12 @@ async function startSelectedDownload() {
   updateDownloadProgress({
     progress: 1,
     message: "正在准备下载",
+  });
+  syncDownloadRing({
+    progress: 1,
+    message: "正在准备下载",
+    error: "",
+    running: true,
   });
 
   try {
@@ -783,7 +840,7 @@ function handleDownloadBack() {
     return;
   }
 
-  launcher.dataset.view = "version";
+  launcher.dataset.view = "home";
 }
 
 function updateVerifyButton() {
@@ -1267,6 +1324,7 @@ renameInput.addEventListener("keydown", (event) => {
 renameInput.addEventListener("blur", commitRename);
 
 cornerDownloadButton.addEventListener("click", openDownloadCenter);
+launchRingButton.addEventListener("click", openDownloadTaskView);
 downloadBackButton.addEventListener("click", handleDownloadBack);
 downloadConfirmButton.addEventListener(
   "click",
@@ -1534,12 +1592,14 @@ async function pollLaunchStatus() {
       "aria-label",
       isGameRunning ? "关闭游戏" : "开始游戏"
     );
-    updateLaunchRing(status.progress || 0);
+    if (!downloadRingVisible) {
+      updateLaunchRing(status.progress || 0);
 
-    if (status.error) {
-      setLaunchStatus(status.error, true);
-    } else if (status.message) {
-      setLaunchStatus(status.message);
+      if (status.error) {
+        setLaunchStatus(status.error, true);
+      } else if (status.message) {
+        setLaunchStatus(status.message);
+      }
     }
   } catch {
     // Ignore transient polling failures.

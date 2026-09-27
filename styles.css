@@ -1401,8 +1401,41 @@ button:focus-visible {
   position: absolute;
   left: 32px;
   bottom: 32px;
+  z-index: 1;
   width: 72px;
   height: 72px;
+  pointer-events: none;
+}
+
+.launch-ring-button {
+  position: absolute;
+  left: 32px;
+  bottom: 32px;
+  z-index: 2;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.launch-ring-button:hover {
+  background: transparent;
+  box-shadow: 0 0 0 5px rgb(88 169 242 / 0.12);
+  transform: scale(1.04);
+}
+
+.launch-ring-button:active {
+  transform: scale(0.96);
+}
+
+.launch-ring-button:focus-visible {
+  border-color: transparent;
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
 .launch-ring-track,
@@ -1586,6 +1619,13 @@ button:focus-visible {
   }
 
   .launch-ring {
+    left: 20px;
+    bottom: 20px;
+    width: 64px;
+    height: 64px;
+  }
+
+  .launch-ring-button {
     left: 20px;
     bottom: 20px;
     width: 64px;
