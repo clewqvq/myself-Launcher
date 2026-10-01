@@ -17,6 +17,7 @@ import urllib.request
 import webbrowser
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import unescape
 from pathlib import Path
 
 import webview
@@ -41,6 +42,13 @@ MINECRAFT_ENTITLEMENTS_URL = (
     "https://api.minecraftservices.com/entitlements/mcstore"
 )
 BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
+MCIM_BASE = "https://mod.mcimirror.top"
+CURSEFORGE_GAME_ID = 432
+MODRINTH_PROJECT_TYPE = {
+    "mods": "mod",
+    "shaders": "shader",
+    "resourcepacks": "resourcepack",
+}
 JAVA_RUNTIME_MANIFEST_URL = (
     "https://launchermeta.mojang.com/v1/products/java-runtime/"
     "2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
@@ -178,6 +186,33 @@ def _fetch_json_urls(urls, timeout=12):
                 ) as response:
                     raw = response.read().decode("utf-8", errors="replace")
                     return json.loads(raw)
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    time.sleep(0.8)
+
+    raise RuntimeError(f"无法读取下载信息：{last_error}")
+
+
+def _fetch_text_urls(urls, timeout=12):
+    last_error = None
+
+    for url in urls:
+        for attempt in range(2):
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "MinecraftLauncher/1.0"},
+                )
+                with urllib.request.urlopen(
+                    request,
+                    timeout=timeout,
+                    context=_network_context(),
+                ) as response:
+                    return response.read().decode(
+                        "utf-8",
+                        errors="replace",
+                    )
             except Exception as exc:
                 last_error = exc
                 if attempt == 0:
@@ -440,6 +475,7 @@ class Api:
         self._version_cache = {}
         self._manifest_cache = None
         self._manifest_cache_time = 0
+        self._translation_cache = {}
 
     def _read_config(self):
         if self._config_cache is not None:
@@ -1604,6 +1640,100 @@ class Api:
 
         return result
 
+    def _maven_versions(self, mirror_url, official_url):
+        versions = set()
+
+        for url in (mirror_url, official_url):
+            try:
+                text = _fetch_text_urls((url,))
+                versions.update(
+                    re.findall(
+                        r"<version>([^<]+)</version>",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                )
+            except Exception:
+                continue
+
+        return list(versions)
+
+    @staticmethod
+    def _version_sort_key(value):
+        parts = re.split(r"[.\-+]", str(value))
+        return tuple(
+            (0, int(part))
+            if part.isdigit()
+            else (1, part.lower())
+            for part in parts
+        )
+
+    def _forge_loaders(self, version_id):
+        versions = self._maven_versions(
+            (
+                f"{BMCLAPI_BASE}/maven/net/minecraftforge/forge/"
+                "maven-metadata.xml"
+            ),
+            (
+                "https://maven.minecraftforge.net/net/minecraftforge/"
+                "forge/maven-metadata.xml"
+            ),
+        )
+        matching = [
+            version
+            for version in versions
+            if version.startswith(f"{version_id}-")
+        ]
+        matching.sort(
+            key=self._version_sort_key,
+            reverse=True,
+        )
+        return [
+            {
+                "id": f"forge:{version}",
+                "name": "Forge",
+                "version": version,
+                "description": "兼容范围广的传统模组加载器",
+            }
+            for version in matching[:8]
+        ]
+
+    def _neoforge_loaders(self, version_id):
+        versions = self._maven_versions(
+            (
+                f"{BMCLAPI_BASE}/maven/net/neoforged/neoforge/"
+                "maven-metadata.xml"
+            ),
+            (
+                "https://maven.neoforged.net/releases/net/neoforged/"
+                "neoforge/maven-metadata.xml"
+            ),
+        )
+        parts = version_id.split(".")
+        prefix = (
+            f"{parts[1]}.{parts[2]}"
+            if len(parts) >= 3
+            else f"{parts[1]}.0"
+        )
+        matching = [
+            version
+            for version in versions
+            if version.startswith(f"{prefix}.")
+        ]
+        matching.sort(
+            key=self._version_sort_key,
+            reverse=True,
+        )
+        return [
+            {
+                "id": f"neoforge:{version}",
+                "name": "NeoForge",
+                "version": version,
+                "description": "面向新版本 Minecraft 的现代加载器",
+            }
+            for version in matching[:8]
+        ]
+
     def get_version_loaders(self, version_id):
         loaders = [
             {
@@ -1619,6 +1749,19 @@ class Api:
             loaders.extend(self._fabric_loaders(version_id))
         except Exception as exc:
             warning = f"Fabric 加载器列表获取失败：{exc}"
+
+        for loader_factory, label in (
+            (self._forge_loaders, "Forge"),
+            (self._neoforge_loaders, "NeoForge"),
+        ):
+            try:
+                loaders.extend(loader_factory(version_id))
+            except Exception as exc:
+                warning = (
+                    f"{warning}；{label} 加载器列表获取失败：{exc}"
+                    if warning
+                    else f"{label} 加载器列表获取失败：{exc}"
+                )
 
         return {
             "ok": True,
@@ -1705,6 +1848,21 @@ class Api:
                         "label": f"依赖库 {target.name}",
                     }
                 )
+                named_classifier = (
+                    name.split(":")[3]
+                    if len(name.split(":")) > 3
+                    else ""
+                )
+                if named_classifier.startswith("natives-"):
+                    native_files.append(
+                        {
+                            "path": target,
+                            "exclude": (
+                                library.get("extract") or {}
+                            ).get("exclude", []),
+                        }
+                    )
+                    continue
 
             native_name = (library.get("natives") or {}).get("windows")
             if not native_name:
@@ -2061,6 +2219,217 @@ class Api:
 
         return base_version
 
+    def _install_installer_loader(
+        self,
+        game_root,
+        base_version,
+        loader_id,
+        java_path,
+    ):
+        loader_name, version = loader_id.split(":", 1)
+        if loader_name == "forge":
+            artifact_path = (
+                "net/minecraftforge/forge/"
+                f"{version}/forge-{version}-installer.jar"
+            )
+            installer_urls = (
+                f"{BMCLAPI_BASE}/maven/{artifact_path}",
+                (
+                    "https://maven.minecraftforge.net/"
+                    f"{artifact_path}"
+                ),
+            )
+        elif loader_name == "neoforge":
+            artifact_path = (
+                "net/neoforged/neoforge/"
+                f"{version}/neoforge-{version}-installer.jar"
+            )
+            installer_urls = (
+                f"{BMCLAPI_BASE}/maven/{artifact_path}",
+                (
+                    "https://maven.neoforged.net/releases/"
+                    f"{artifact_path}"
+                ),
+            )
+        else:
+            raise RuntimeError("暂不支持该模组加载器")
+
+        installer = (
+            self.config_path.parent
+            / "cache"
+            / Path(artifact_path).name
+        )
+        launcher_profiles = game_root / "launcher_profiles.json"
+        if not launcher_profiles.exists():
+            launcher_profiles.write_text(
+                json.dumps(
+                    {
+                        "profiles": {},
+                        "settings": {},
+                        "version": 3,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        self.download_state.update(
+            93,
+            f"正在下载 {loader_name.title()} 安装器",
+        )
+        _download_urls(installer_urls, installer)
+
+        log_path = self.config_path.parent / "logs" / "loader-install.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.download_state.update(
+            94,
+            f"正在安装 {loader_name.title()} {version}",
+        )
+
+        with open(
+            log_path,
+            "a",
+            encoding="utf-8",
+            errors="replace",
+        ) as log:
+            log.write(
+                f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"{loader_id} -> {game_root}\n"
+            )
+            result = subprocess.run(
+                [
+                    str(java_path),
+                    "-jar",
+                    str(installer),
+                    "--installClient",
+                    str(game_root),
+                ],
+                cwd=str(game_root),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=600,
+                creationflags=0,
+            )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{loader_name.title()} 安装器返回错误码 "
+                f"{result.returncode}，请查看 {log_path}"
+            )
+
+        versions_root = game_root / "versions"
+        candidates = []
+
+        for folder in versions_root.iterdir():
+            if not folder.is_dir():
+                continue
+
+            for json_path in folder.glob("*.json"):
+                try:
+                    data = json.loads(
+                        json_path.read_text(encoding="utf-8")
+                    )
+                except Exception:
+                    continue
+
+                candidate_id = str(data.get("id") or json_path.stem)
+                main_class = str(data.get("mainClass") or "").lower()
+                if data.get("inheritsFrom") != base_version:
+                    continue
+                if loader_name not in candidate_id.lower() and loader_name not in main_class:
+                    continue
+                candidates.append((json_path.stat().st_mtime_ns, candidate_id))
+
+        if not candidates:
+            raise RuntimeError(
+                f"{loader_name.title()} 安装完成，但未找到版本配置"
+            )
+
+        candidates.sort(reverse=True)
+        installed_id = candidates[0][1]
+        installed_json = (
+            versions_root / installed_id / f"{installed_id}.json"
+        )
+        base_json_path = (
+            versions_root / base_version / f"{base_version}.json"
+        )
+
+        try:
+            generated_json = json.loads(
+                installed_json.read_text(encoding="utf-8")
+            )
+            base_json = json.loads(
+                base_json_path.read_text(encoding="utf-8")
+            )
+            merged = dict(base_json)
+            merged.update(generated_json)
+            merged["id"] = installed_id
+            merged["inheritsFrom"] = base_version
+
+            library_map = {}
+            for library in (
+                list(base_json.get("libraries", []))
+                + list(generated_json.get("libraries", []))
+            ):
+                name = str(library.get("name", ""))
+                key = name
+                if key:
+                    library_map[key] = library
+            merged["libraries"] = list(library_map.values())
+
+            merged_arguments = {}
+            base_arguments = base_json.get("arguments") or {}
+            child_arguments = generated_json.get("arguments") or {}
+            for key in ("jvm", "game"):
+                merged_arguments[key] = (
+                    list(base_arguments.get(key, []))
+                    + list(child_arguments.get(key, []))
+                )
+            merged["arguments"] = merged_arguments
+            installed_json.write_text(
+                json.dumps(
+                    merged,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"{loader_name.title()} 版本配置合并失败：{exc}"
+            )
+
+        base_jar = (
+            game_root
+            / "versions"
+            / base_version
+            / f"{base_version}.jar"
+        )
+        installed_folder = versions_root / installed_id
+        installed_jar = installed_folder / f"{installed_id}.jar"
+        base_natives = (
+            game_root
+            / "versions"
+            / base_version
+            / f"{base_version}-natives"
+        )
+        installed_natives = (
+            installed_folder / f"{installed_id}-natives"
+        )
+
+        if base_jar.exists() and not installed_jar.exists():
+            shutil.copyfile(base_jar, installed_jar)
+
+        if base_natives.is_dir():
+            installed_natives.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(
+                base_natives,
+                installed_natives,
+                dirs_exist_ok=True,
+            )
+
+        return installed_id
+
     def _register_installed_version(self, game_root, version_id):
         info = self._build_import_info(
             game_root,
@@ -2093,7 +2462,12 @@ class Api:
         if not version_id:
             return {"ok": False, "message": "未选择 Minecraft 版本"}
 
-        if loader_id != "vanilla" and not loader_id.startswith("fabric:"):
+        if (
+            loader_id != "vanilla"
+            and not loader_id.startswith("fabric:")
+            and not loader_id.startswith("forge:")
+            and not loader_id.startswith("neoforge:")
+        ):
             return {"ok": False, "message": "暂不支持该模组加载器"}
 
         thread = threading.Thread(
@@ -2145,10 +2519,12 @@ class Api:
                 java_config.get("majorVersion") or 0
             )
             if required_java:
-                self._ensure_java_runtime(
+                java = self._ensure_java_runtime(
                     java_config.get("component", ""),
                     required_java,
                 )
+            else:
+                java = self._find_java()
 
             installed_id = version_id
 
@@ -2165,6 +2541,15 @@ class Api:
                     entry,
                     loader_version,
                     base_install.get("native_files", []),
+                )
+            elif loader_id.startswith(
+                ("forge:", "neoforge:")
+            ):
+                installed_id = self._install_installer_loader(
+                    game_root,
+                    version_id,
+                    loader_id,
+                    java,
                 )
 
             info = self._register_installed_version(
@@ -2209,6 +2594,596 @@ class Api:
 
     def get_download_status(self):
         return self.download_state.snapshot()
+
+    def _content_context(self):
+        info = self.imported_info or self._load_imported_info()
+
+        if not info:
+            raise RuntimeError("请先导入游戏文件夹")
+
+        version_json_path = Path(info.get("version_json", ""))
+        version_data = {}
+        if version_json_path.exists():
+            try:
+                version_data = json.loads(
+                    version_json_path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                version_data = {}
+
+        version_id = (
+            info.get("version_id")
+            or version_data.get("id")
+            or ""
+        )
+        main_class = (
+            info.get("main_class")
+            or version_data.get("mainClass")
+            or ""
+        ).lower()
+        version_lower = version_id.lower()
+        loader = ""
+
+        if version_data.get("fabricLoaderVersion"):
+            loader = "fabric"
+        elif "neoforge" in version_lower or "neoforge" in main_class:
+            loader = "neoforge"
+        elif "forge" in version_lower or "forge" in main_class:
+            loader = "forge"
+
+        return {
+            "info": info,
+            "game_version": version_id,
+            "loader": loader,
+            "game_root": Path(info["game_root"]),
+            "version_folder": Path(info["version_folder"]),
+        }
+
+    def _mcmod_translation(self, title, slug=""):
+        keys = [
+            value.strip().lower()
+            for value in (slug, title)
+            if value and value.strip()
+        ]
+
+        for key in keys:
+            if key in self._translation_cache:
+                return self._translation_cache[key]
+
+        for query in (slug, title):
+            if not query:
+                continue
+
+            try:
+                url = (
+                    "https://www.mcmod.cn/s?key="
+                    + urllib.parse.quote(str(query))
+                )
+                html = _fetch_text_urls((url,), timeout=10)
+                match = re.search(
+                    (
+                        r'<div class="result-item">.*?'
+                        r'<div class="head">.*?'
+                        r'<a[^>]+href="(?:https?:)?//'
+                        r'www\.mcmod\.cn/class/\d+\.html"[^>]*>'
+                        r"(.*?)</a>"
+                    ),
+                    html,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+
+                if not match:
+                    continue
+
+                raw_title = unescape(
+                    re.sub(r"<[^>]+>", " ", match.group(1))
+                )
+                raw_title = re.sub(r"\s+", " ", raw_title).strip()
+                translation = raw_title.split("(", 1)[0].strip()
+
+                if translation.startswith("[") and "]" in translation:
+                    translation = translation.split("]", 1)[1].strip()
+
+                if translation:
+                    for key in keys:
+                        self._translation_cache[key] = translation
+                    return translation
+            except Exception:
+                continue
+
+        return str(title or slug or "未译名")
+
+    @staticmethod
+    def _safe_content_name(value):
+        text = re.sub(r'[<>:"/\\|?*]+', "", str(value or ""))
+        text = re.sub(r"\s+", "-", text.strip())
+        return text or "content"
+
+    def _search_modrinth(
+        self,
+        category,
+        query,
+        game_version,
+        loader,
+        limit,
+    ):
+        project_type = MODRINTH_PROJECT_TYPE[category]
+        facets = [[f"project_type:{project_type}"]]
+
+        if game_version:
+            facets.append([f"versions:{game_version}"])
+
+        if category == "mods" and loader:
+            facets.append([f"categories:{loader}"])
+
+        params = urllib.parse.urlencode(
+            {
+                "query": query or "",
+                "limit": limit,
+                "offset": 0,
+                "index": "downloads",
+                "facets": json.dumps(facets, separators=(",", ":")),
+            }
+        )
+        data = _fetch_json_urls(
+            (f"{MCIM_BASE}/modrinth/v2/search?{params}",)
+        )
+        results = []
+        exact_slug = str(query or "").strip().lower()
+
+        for hit in data.get("hits", []):
+            project_id = hit.get("project_id")
+            if not project_id:
+                continue
+            title = hit.get("title") or project_id
+            slug = hit.get("slug") or ""
+            searchable = (
+                f"{title} {slug} {hit.get('description', '')}".lower()
+            )
+            if query and query.lower() not in searchable:
+                continue
+            results.append(
+                {
+                    "source": "modrinth",
+                    "source_label": "Modrinth",
+                    "project_id": project_id,
+                    "slug": slug,
+                    "title": title,
+                    "description": hit.get("description") or "",
+                    "downloads": int(hit.get("downloads") or 0),
+                    "icon_url": hit.get("icon_url") or "",
+                    "versions": hit.get("versions") or [],
+                }
+            )
+
+        if exact_slug and not any(
+            item["slug"].lower() == exact_slug
+            for item in results
+        ):
+            try:
+                exact = _fetch_json_urls(
+                    (
+                        f"{MCIM_BASE}/modrinth/v2/project/"
+                        f"{urllib.parse.quote(exact_slug)}",
+                        (
+                            "https://api.modrinth.com/v2/project/"
+                            f"{urllib.parse.quote(exact_slug)}"
+                        ),
+                    )
+                )
+                if exact.get("project_type") == project_type:
+                    results.append(
+                        {
+                            "source": "modrinth",
+                            "source_label": "Modrinth",
+                            "project_id": exact.get("id"),
+                            "slug": exact.get("slug") or exact_slug,
+                            "title": exact.get("title") or exact_slug,
+                            "description": exact.get("description") or "",
+                            "downloads": int(
+                                exact.get("downloads") or 0
+                            ),
+                            "icon_url": exact.get("icon_url") or "",
+                            "versions": exact.get("game_versions") or [],
+                        }
+                    )
+            except Exception:
+                pass
+
+        return results, int(data.get("total_hits") or len(results))
+
+    def _search_curseforge(
+        self,
+        category,
+        query,
+        game_version,
+        loader,
+        limit,
+    ):
+        class_ids = {
+            "mods": 6,
+            "shaders": 6552,
+            "resourcepacks": 12,
+        }
+        loader_types = {
+            "forge": 1,
+            "fabric": 4,
+            "quilt": 5,
+            "neoforge": 6,
+        }
+        params = {
+            "gameId": CURSEFORGE_GAME_ID,
+            "searchFilter": query or "",
+            "classId": class_ids[category],
+            "gameVersion": game_version,
+            "pageSize": limit,
+            "index": 0,
+            "sortField": 2,
+            "sortOrder": "desc",
+        }
+
+        if category == "mods" and loader in loader_types:
+            params["modLoaderType"] = loader_types[loader]
+
+        url = (
+            f"{MCIM_BASE}/curseforge/v1/mods/search?"
+            + urllib.parse.urlencode(params)
+        )
+        data = _fetch_json_urls((url,))
+        results = []
+
+        for item in data.get("data", []):
+            project_id = item.get("id")
+            if not project_id:
+                continue
+            title = item.get("name") or str(project_id)
+            slug = item.get("slug") or ""
+            searchable = f"{title} {slug}".lower()
+            if query and query.lower() not in searchable:
+                continue
+            logo = item.get("logo") or {}
+            results.append(
+                {
+                    "source": "curseforge",
+                    "source_label": "CurseForge",
+                    "project_id": str(project_id),
+                    "slug": slug,
+                    "title": title,
+                    "description": item.get("summary") or "",
+                    "downloads": int(item.get("downloadCount") or 0),
+                    "icon_url": logo.get("url") or "",
+                    "versions": [
+                        value.get("gameVersion")
+                        for value in item.get("latestFilesIndexes", [])
+                        if value.get("gameVersion")
+                    ],
+                }
+            )
+
+        pagination = data.get("pagination") or {}
+        return results, int(
+            pagination.get("totalCount") or len(results)
+        )
+
+    def search_content(
+        self,
+        category,
+        query,
+        game_version,
+        loader,
+        page,
+    ):
+        if category not in MODRINTH_PROJECT_TYPE:
+            return {
+                "ok": False,
+                "message": "该分类暂不支持在线搜索",
+            }
+
+        if not loader:
+            try:
+                loader = self._content_context().get("loader", "")
+            except Exception:
+                loader = ""
+
+        page = max(int(page or 1), 1)
+        page_size = 20
+        fetch_count = min(page * page_size, 200)
+        results = []
+        totals = []
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(
+                    self._search_modrinth,
+                    category,
+                    query,
+                    game_version,
+                    loader,
+                    fetch_count,
+                ),
+                executor.submit(
+                    self._search_curseforge,
+                    category,
+                    query,
+                    game_version,
+                    loader,
+                    fetch_count,
+                ),
+            ]
+
+            for future in futures:
+                try:
+                    items, total = future.result()
+                    results.extend(items)
+                    totals.append(total)
+                except Exception:
+                    continue
+
+        deduped = {}
+        for item in results:
+            key = (
+                item.get("slug") or item.get("title", "")
+            ).strip().lower()
+            current = deduped.get(key)
+            if not current or item["downloads"] > current["downloads"]:
+                deduped[key] = item
+
+        ordered = sorted(
+            deduped.values(),
+            key=lambda item: item["downloads"],
+            reverse=True,
+        )
+        start = (page - 1) * page_size
+        items = ordered[start:start + page_size]
+        total = max(totals or [len(ordered)])
+
+        return {
+            "ok": True,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_more": page * page_size < total,
+            "items": items,
+        }
+
+    def _content_file_modrinth(
+        self,
+        category,
+        project_id,
+        game_version,
+        loader,
+    ):
+        url = (
+            f"{MCIM_BASE}/modrinth/v2/project/"
+            f"{urllib.parse.quote(str(project_id))}/version"
+        )
+        versions = _fetch_json_urls((url,))
+        compatible = []
+
+        for version in versions:
+            if game_version and game_version not in version.get(
+                "game_versions",
+                [],
+            ):
+                continue
+
+            if (
+                category == "mods"
+                and loader
+                and loader not in version.get("loaders", [])
+            ):
+                continue
+
+            compatible.append(version)
+
+        compatible.sort(
+            key=lambda item: item.get("date_published", ""),
+            reverse=True,
+        )
+
+        if not compatible:
+            raise RuntimeError("没有找到兼容当前版本的文件")
+
+        version = compatible[0]
+        files = version.get("files") or []
+        file_info = next(
+            (item for item in files if item.get("primary")),
+            files[0] if files else None,
+        )
+
+        if not file_info:
+            raise RuntimeError("项目没有可下载文件")
+
+        return {
+            "url": file_info.get("url", ""),
+            "sha1": (file_info.get("hashes") or {}).get("sha1", ""),
+            "file_name": file_info.get("filename", ""),
+            "version": version.get("version_number", ""),
+        }
+
+    def _content_file_curseforge(
+        self,
+        category,
+        project_id,
+        game_version,
+        loader,
+    ):
+        url = (
+            f"{MCIM_BASE}/curseforge/v1/mods/"
+            f"{urllib.parse.quote(str(project_id))}/files"
+            "?pageSize=50"
+        )
+        data = _fetch_json_urls((url,))
+        compatible = []
+        loader_names = {
+            "forge": "Forge",
+            "fabric": "Fabric",
+            "neoforge": "NeoForge",
+            "quilt": "Quilt",
+        }
+
+        for item in data.get("data", []):
+            game_versions = item.get("gameVersions") or []
+            if game_version and game_version not in game_versions:
+                continue
+
+            if (
+                category == "mods"
+                and loader
+                and loader_names.get(loader)
+                not in game_versions
+            ):
+                continue
+
+            compatible.append(item)
+
+        compatible.sort(
+            key=lambda item: item.get("fileDate", ""),
+            reverse=True,
+        )
+
+        if not compatible:
+            raise RuntimeError("没有找到兼容当前版本的文件")
+
+        file_info = compatible[0]
+        sha1 = ""
+        for item in file_info.get("hashes", []):
+            if item.get("algo") == 1:
+                sha1 = item.get("value", "")
+                break
+
+        return {
+            "url": file_info.get("downloadUrl", ""),
+            "sha1": sha1,
+            "file_name": file_info.get("fileName", ""),
+            "version": file_info.get("displayName", ""),
+        }
+
+    def start_content_download(
+        self,
+        category,
+        source,
+        project_id,
+        title,
+        slug,
+    ):
+        current = self.download_state.snapshot()
+        if current["running"]:
+            return {"ok": False, "message": "已有下载任务正在进行"}
+
+        thread = threading.Thread(
+            target=self._content_download_worker,
+            args=(
+                category,
+                source,
+                str(project_id),
+                title,
+                slug,
+            ),
+            daemon=True,
+        )
+        thread.start()
+        return {"ok": True, "message": "已开始下载"}
+
+    def _content_download_worker(
+        self,
+        category,
+        source,
+        project_id,
+        title,
+        slug,
+    ):
+        self.download_state.begin(f"正在获取 {title}")
+
+        try:
+            context = self._content_context()
+            game_version = context["game_version"]
+            loader = context["loader"]
+
+            if source == "modrinth":
+                file_info = self._content_file_modrinth(
+                    category,
+                    project_id,
+                    game_version,
+                    loader,
+                )
+            elif source == "curseforge":
+                file_info = self._content_file_curseforge(
+                    category,
+                    project_id,
+                    game_version,
+                    loader,
+                )
+            else:
+                raise RuntimeError("未知的下载源")
+
+            if not file_info.get("url"):
+                raise RuntimeError("文件下载地址为空")
+
+            translation = self._mcmod_translation(title, slug)
+            english_name = self._safe_content_name(slug or title)
+            suffix = Path(file_info.get("file_name", "")).suffix
+            if not suffix:
+                suffix = Path(
+                    urllib.parse.urlparse(
+                        file_info["url"]
+                    ).path
+                ).suffix or ".jar"
+
+            raw_version = (
+                file_info.get("version")
+                or Path(file_info.get("file_name", "")).stem
+                or "latest"
+            )
+            if str(raw_version).lower().endswith(suffix.lower()):
+                raw_version = str(raw_version)[:-len(suffix)]
+
+            if game_version and game_version in str(raw_version):
+                tail = str(raw_version).split(game_version, 1)[1]
+                raw_version = tail.lstrip("-_.") or str(raw_version)
+
+            file_version = self._safe_content_name(raw_version)
+
+            target_folder = context["version_folder"] / {
+                "mods": "mods",
+                "shaders": "shaderpacks",
+                "resourcepacks": "resourcepacks",
+            }[category]
+            target_folder.mkdir(parents=True, exist_ok=True)
+
+            filename = (
+                f"[{self._safe_content_name(translation)}]"
+                f"{english_name}-{game_version}-{file_version}{suffix}"
+            )
+            target = target_folder / filename
+            self.download_state.update(
+                10,
+                f"正在下载 {title}",
+            )
+            self._run_download_jobs(
+                [
+                    {
+                        "urls": (file_info["url"],),
+                        "target": target,
+                        "sha1": file_info.get("sha1", ""),
+                        "label": f"下载 {filename}",
+                    }
+                ],
+                workers=1,
+            )
+            result = {
+                "category": category,
+                "path": str(target),
+                "filename": filename,
+                "game_version": game_version,
+                "loader": loader,
+            }
+            self.download_state.finish(
+                result,
+                f"{filename} 下载完成",
+            )
+        except Exception as exc:
+            self.download_state.fail(exc)
 
     def _java_major_version(self, java_path):
         try:
@@ -2390,6 +3365,13 @@ class Api:
         classpath = [info["version_jar"]]
 
         for library in version_json.get("libraries", []):
+            name_parts = str(library.get("name", "")).split(":")
+            if (
+                len(name_parts) > 3
+                and name_parts[3].startswith("natives-")
+            ):
+                continue
+
             artifact_path = (
                 library.get("downloads", {}).get("artifact", {}).get("path")
             )
@@ -2397,8 +3379,6 @@ class Api:
             if artifact_path:
                 library_file = libraries_root / artifact_path
             else:
-                name_parts = str(library.get("name", "")).split(":")
-
                 if len(name_parts) < 3:
                     continue
 
@@ -2447,6 +3427,52 @@ class Api:
             xuid = ""
             user_type = "legacy"
 
+        if (
+            "forge" in str(info["version_id"]).lower()
+            or "forge" in str(info["main_class"]).lower()
+        ):
+            arguments = version_json.get("arguments") or {}
+            values = {
+                "auth_player_name": username,
+                "version_name": info["version_id"],
+                "game_directory": info["version_folder"],
+                "assets_root": info["assets_root"],
+                "assets_index_name": info["asset_index"],
+                "auth_uuid": profile_id,
+                "auth_access_token": access_token,
+                "clientid": client_id,
+                "auth_xuid": xuid,
+                "user_type": user_type,
+                "version_type": "release",
+                "natives_directory": natives,
+                "launcher_name": "MinecraftLauncher",
+                "launcher_version": "1.0",
+                "classpath": os.pathsep.join(classpath),
+                "classpath_separator": os.pathsep,
+                "library_directory": str(libraries_root),
+            }
+            jvm_args = self._resolve_version_arguments(
+                arguments.get("jvm", []),
+                values,
+            )
+            jvm_args.insert(
+                0,
+                f"-DlegacyClassPath={os.pathsep.join(classpath)}",
+            )
+            game_args = self._resolve_version_arguments(
+                arguments.get("game", []),
+                values,
+            )
+
+            return [
+                str(java),
+                f"-Xms{min(memory_mb, 1024)}m",
+                f"-Xmx{memory_mb}m",
+                *jvm_args,
+                info["main_class"],
+                *game_args,
+            ], Path(info["version_folder"])
+
         args = [
             str(java),
             f"-Xms{min(memory_mb, 1024)}m",
@@ -2486,6 +3512,73 @@ class Api:
         ]
 
         return args, Path(info["version_folder"])
+
+    @staticmethod
+    def _rules_allow(rules):
+        if not rules:
+            return True
+
+        allowed = False
+
+        for rule in rules:
+            os_rule = rule.get("os") or {}
+            os_name = os_rule.get("name")
+            if os_name and os_name != "windows":
+                continue
+
+            arch = os_rule.get("arch")
+            if arch and arch not in ("x86_64", "amd64"):
+                continue
+
+            features = rule.get("features") or {}
+            if any(bool(value) for value in features.values()):
+                continue
+
+            allowed = rule.get("action") == "allow"
+
+        return allowed
+
+    @staticmethod
+    def _expand_version_argument(value, variables):
+        return re.sub(
+            r"\$\{([^}]+)\}",
+            lambda match: str(
+                variables.get(match.group(1), "")
+            ),
+            str(value),
+        )
+
+    def _resolve_version_arguments(self, arguments, variables):
+        result = []
+
+        for argument in arguments or []:
+            if isinstance(argument, str):
+                result.append(
+                    self._expand_version_argument(
+                        argument,
+                        variables,
+                    )
+                )
+                continue
+
+            if not isinstance(argument, dict):
+                continue
+            if not self._rules_allow(argument.get("rules")):
+                continue
+
+            values = argument.get("value", [])
+            if isinstance(values, str):
+                values = [values]
+
+            for value in values:
+                result.append(
+                    self._expand_version_argument(
+                        value,
+                        variables,
+                    )
+                )
+
+        return result
 
     def launch_game(self):
         info = self.imported_info or self._load_imported_info()

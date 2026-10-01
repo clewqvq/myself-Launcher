@@ -29,6 +29,27 @@ const downloadCatalogPanel = document.querySelector(
 const downloadLoaderPanel = document.querySelector(
   ".download-loader-panel"
 );
+const downloadBrowserPanel = document.querySelector(
+  ".download-browser-panel"
+);
+const downloadSearchInput = document.querySelector(
+  ".download-search-input"
+);
+const downloadSearchButton = document.querySelector(
+  ".download-search-button"
+);
+const downloadResultList = document.querySelector(
+  ".download-result-list"
+);
+const downloadPagePrevButtons = document.querySelectorAll(
+  ".download-page-prev"
+);
+const downloadPageNextButtons = document.querySelectorAll(
+  ".download-page-next"
+);
+const downloadPageLabels = document.querySelectorAll(
+  ".download-page-label"
+);
 const selectedDownloadVersion = document.querySelector(
   ".selected-download-version"
 );
@@ -135,6 +156,9 @@ let lastLaunchStatusMessage = null;
 let lastLaunchStatusError = null;
 let lastDownloadProgress = null;
 let lastDownloadMessage = null;
+let contentSearchPage = 1;
+let contentSearchHasMore = false;
+let contentSearchPending = false;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -491,6 +515,7 @@ function formatDownloadDate(value) {
 function showDownloadPanel(panel) {
   downloadCatalogPanel.hidden = panel !== downloadCatalogPanel;
   downloadLoaderPanel.hidden = panel !== downloadLoaderPanel;
+  downloadBrowserPanel.hidden = panel !== downloadBrowserPanel;
   downloadPlaceholderPanel.hidden =
     panel !== downloadPlaceholderPanel;
   downloadProgressPanel.hidden =
@@ -598,6 +623,183 @@ async function loadDownloadCatalog() {
   }
 }
 
+function formatDownloadCount(value) {
+  const count = Number(value) || 0;
+
+  if (count >= 100000000) {
+    return `${(count / 100000000).toFixed(1)}亿`;
+  }
+
+  if (count >= 10000) {
+    return `${(count / 10000).toFixed(1)}万`;
+  }
+
+  return String(count);
+}
+
+function renderContentResults(items) {
+  downloadResultList.replaceChildren();
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "download-browser-status";
+    empty.textContent = "没有找到兼容内容";
+    downloadResultList.appendChild(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "download-result-item";
+    button.dataset.source = item.source;
+    button.dataset.projectId = item.project_id;
+    button.dataset.title = item.title;
+    button.dataset.slug = item.slug || "";
+
+    const icon = document.createElement("span");
+    icon.className = "download-result-icon";
+    if (item.icon_url) {
+      icon.style.backgroundImage = `url("${item.icon_url}")`;
+    }
+
+    const copy = document.createElement("span");
+    copy.className = "download-result-copy";
+    const title = document.createElement("strong");
+    title.className = "download-result-title";
+    title.textContent = item.title;
+    const description = document.createElement("span");
+    description.className = "download-result-description";
+    description.textContent = item.description || "";
+    copy.append(title, description);
+
+    const meta = document.createElement("span");
+    meta.className = "download-result-meta";
+    const source = document.createElement("span");
+    source.className = "download-result-source";
+    source.textContent = item.source_label;
+    const downloads = document.createElement("span");
+    downloads.className = "download-result-downloads";
+    downloads.textContent = `下载 ${formatDownloadCount(item.downloads)}`;
+    meta.append(source, downloads);
+
+    button.append(icon, copy, meta);
+    button.addEventListener("click", () => {
+      handleContentDownload(item);
+    });
+    fragment.appendChild(button);
+  }
+
+  downloadResultList.appendChild(fragment);
+}
+
+function updateContentPagination() {
+  downloadPageLabels.forEach((label) => {
+    label.textContent = `第 ${contentSearchPage} 页`;
+  });
+  downloadPagePrevButtons.forEach((button) => {
+    button.disabled = contentSearchPage <= 1 || contentSearchPending;
+  });
+  downloadPageNextButtons.forEach((button) => {
+    button.disabled = !contentSearchHasMore || contentSearchPending;
+  });
+}
+
+async function loadContentSearch(page = 1) {
+  if (
+    !window.pywebview?.api?.search_content ||
+    !["mods", "shaders", "resourcepacks"].includes(
+      selectedDownloadCategory
+    )
+  ) {
+    return;
+  }
+
+  contentSearchPending = true;
+  contentSearchPage = Math.max(1, page);
+  updateContentPagination();
+  downloadResultList.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "download-browser-status";
+  status.textContent = "正在读取内容列表...";
+  downloadResultList.appendChild(status);
+
+  try {
+    const result = await window.pywebview.api.search_content(
+      selectedDownloadCategory,
+      downloadSearchInput.value.trim(),
+      selectedVersionId || currentVersion,
+      "",
+      contentSearchPage
+    );
+
+    if (!result.ok) {
+      throw new Error(result.message || "读取内容列表失败");
+    }
+
+    contentSearchHasMore = Boolean(result.has_more);
+    renderContentResults(result.items || []);
+  } catch (error) {
+    downloadResultList.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "download-browser-status";
+    message.textContent = error?.message || "读取内容列表失败";
+    downloadResultList.appendChild(message);
+    contentSearchHasMore = false;
+  } finally {
+    contentSearchPending = false;
+    updateContentPagination();
+  }
+}
+
+function startDownloadPolling() {
+  clearInterval(downloadPollTimer);
+  downloadPollTimer = setInterval(pollDownloadStatus, 600);
+  pollDownloadStatus();
+}
+
+async function handleContentDownload(item) {
+  if (!window.pywebview?.api?.start_content_download) {
+    return;
+  }
+
+  downloadConfirmButton.hidden = true;
+  downloadFinished = false;
+  showDownloadPanel(downloadProgressPanel);
+  updateDownloadProgress({
+    progress: 1,
+    message: `正在准备下载 ${item.title}`,
+  });
+  syncDownloadRing({
+    progress: 1,
+    message: `正在准备下载 ${item.title}`,
+    error: "",
+    running: true,
+  });
+
+  try {
+    const result =
+      await window.pywebview.api.start_content_download(
+        selectedDownloadCategory,
+        item.source,
+        item.project_id,
+        item.title,
+        item.slug || ""
+      );
+
+    if (!result.ok) {
+      throw new Error(result.message || "无法开始下载");
+    }
+
+    startDownloadPolling();
+  } catch (error) {
+    downloadProgressMessage.textContent =
+      error?.message || "无法开始下载";
+  }
+}
+
 function selectDownloadCategory(category) {
   selectedDownloadCategory = category;
   selectedDownloadVersionId = "";
@@ -622,6 +824,16 @@ function selectDownloadCategory(category) {
     if (!downloadCatalog.length) {
       loadDownloadCatalog();
     }
+    return;
+  }
+
+  if (
+    ["mods", "shaders", "resourcepacks"].includes(category)
+  ) {
+    downloadSearchInput.value = "";
+    contentSearchPage = 1;
+    showDownloadPanel(downloadBrowserPanel);
+    loadContentSearch(1);
     return;
   }
 
@@ -851,9 +1063,7 @@ async function startSelectedDownload() {
       throw new Error(result.message || "无法开始下载");
     }
 
-    clearInterval(downloadPollTimer);
-    downloadPollTimer = setInterval(pollDownloadStatus, 600);
-    pollDownloadStatus();
+    startDownloadPolling();
   } catch (error) {
     downloadProgressMessage.textContent =
       error?.message || "无法开始下载";
@@ -1411,6 +1621,32 @@ downloadCategoryButtons.forEach((button) => {
       return;
     }
     selectDownloadCategory(button.dataset.downloadCategory);
+  });
+});
+
+downloadSearchButton.addEventListener("click", () => {
+  loadContentSearch(1);
+});
+
+downloadSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    loadContentSearch(1);
+  }
+});
+
+downloadPagePrevButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (contentSearchPage > 1) {
+      loadContentSearch(contentSearchPage - 1);
+    }
+  });
+});
+
+downloadPageNextButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (contentSearchHasMore) {
+      loadContentSearch(contentSearchPage + 1);
+    }
   });
 });
 
