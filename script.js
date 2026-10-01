@@ -130,6 +130,11 @@ let downloadFinished = false;
 let activeDownloadTask = null;
 let downloadRingVisible = false;
 let downloadRingResetTimer = null;
+let lastRingProgress = null;
+let lastLaunchStatusMessage = null;
+let lastLaunchStatusError = null;
+let lastDownloadProgress = null;
+let lastDownloadMessage = null;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -492,6 +497,38 @@ function showDownloadPanel(panel) {
     panel !== downloadProgressPanel;
 }
 
+function appendDownloadVersions(list, versions) {
+  if (list.dataset.rendered === "true") {
+    return;
+  }
+
+  list.dataset.rendered = "true";
+  const fragment = document.createDocumentFragment();
+
+  for (const version of versions) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "download-version-button";
+    item.dataset.versionId = version.id;
+
+    const versionLabel = document.createElement("span");
+    versionLabel.className = "download-version-id";
+    versionLabel.textContent = version.id;
+
+    const date = document.createElement("span");
+    date.className = "download-version-date";
+    date.textContent = formatDownloadDate(version.release_time);
+
+    item.append(versionLabel, date);
+    item.addEventListener("click", () => {
+      openLoaderSelection(version.id);
+    });
+    fragment.appendChild(item);
+  }
+
+  list.appendChild(fragment);
+}
+
 function renderDownloadCatalog() {
   versionCategoryList.replaceChildren();
   downloadLoading.classList.add("is-hidden");
@@ -512,29 +549,18 @@ function renderDownloadCatalog() {
 
     const list = document.createElement("div");
     list.className = "download-version-list";
+    details.append(summary, list);
 
-    for (const version of group.versions) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "download-version-button";
-      item.dataset.versionId = version.id;
+    details.addEventListener("toggle", () => {
+      if (details.open) {
+        appendDownloadVersions(list, group.versions);
+      }
+    });
 
-      const versionLabel = document.createElement("span");
-      versionLabel.className = "download-version-id";
-      versionLabel.textContent = version.id;
-
-      const date = document.createElement("span");
-      date.className = "download-version-date";
-      date.textContent = formatDownloadDate(version.release_time);
-
-      item.append(versionLabel, date);
-      item.addEventListener("click", () => {
-        openLoaderSelection(version.id);
-      });
-      list.appendChild(item);
+    if (details.open) {
+      appendDownloadVersions(list, group.versions);
     }
 
-    details.append(summary, list);
     fragment.appendChild(details);
   });
 
@@ -687,10 +713,18 @@ function updateDownloadProgress(status) {
     0,
     Math.min(100, Number(status.progress) || 0)
   );
-  downloadProgressFill.style.width = `${progress}%`;
-  downloadProgressPercent.textContent = `${progress}%`;
-  downloadProgressMessage.textContent =
-    status.message || "正在下载";
+  const message = status.message || "正在下载";
+
+  if (progress !== lastDownloadProgress) {
+    lastDownloadProgress = progress;
+    downloadProgressFill.style.width = `${progress}%`;
+    downloadProgressPercent.textContent = `${progress}%`;
+  }
+
+  if (message !== lastDownloadMessage) {
+    lastDownloadMessage = message;
+    downloadProgressMessage.textContent = message;
+  }
 }
 
 function scheduleDownloadRingReset() {
@@ -983,6 +1017,46 @@ function createSidebarItem({
   return item;
 }
 
+function syncSidebarState(
+  container,
+  itemClass,
+  datasetKey,
+  activeValue,
+  busy
+) {
+  if (!container) {
+    return;
+  }
+
+  container.toggleAttribute("aria-busy", busy);
+
+  container.querySelectorAll(`.${itemClass}`).forEach((item) => {
+    const isActive = item.dataset[datasetKey] === activeValue;
+    item.classList.toggle("is-active", isActive);
+    item.classList.toggle("is-busy", busy && isActive);
+  });
+}
+
+function syncFolderSidebarState() {
+  syncSidebarState(
+    folderList,
+    "folder-item",
+    "sourceFolder",
+    selectedSourceFolder,
+    folderSelectPending
+  );
+}
+
+function syncVersionSidebarState() {
+  syncSidebarState(
+    versionList,
+    "version-sidebar-item",
+    "versionId",
+    selectedVersionId,
+    versionSelectPending
+  );
+}
+
 function renderFolderSidebar() {
   if (!folderList) {
     return;
@@ -1121,7 +1195,7 @@ async function handleVersionSelect(versionId) {
   const previousVersionId = selectedVersionId;
   versionSelectPending = true;
   selectedVersionId = versionId;
-  renderVersionSidebar();
+  syncVersionSidebarState();
 
   if (isEditing) {
     isEditing = false;
@@ -1142,19 +1216,19 @@ async function handleVersionSelect(versionId) {
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
-      renderVersionSidebar();
+      syncVersionSidebarState();
       await refreshVersionState();
       setLaunchStatus(result.message || "已切换版本");
     } else {
       versionSelectPending = false;
       selectedVersionId = previousVersionId;
-      renderVersionSidebar();
+      syncVersionSidebarState();
       setLaunchStatus(result.message || "未找到游戏版本", true);
     }
   } catch (error) {
     versionSelectPending = false;
     selectedVersionId = previousVersionId;
-    renderVersionSidebar();
+    syncVersionSidebarState();
     setLaunchStatus(error?.message || "切换版本失败", true);
   }
 }
@@ -1172,7 +1246,7 @@ async function handleFolderSelect(sourceFolder) {
   const previousSourceFolder = selectedSourceFolder;
   folderSelectPending = true;
   selectedSourceFolder = sourceFolder;
-  renderFolderSidebar();
+  syncFolderSidebarState();
 
   if (isEditing) {
     isEditing = false;
@@ -1191,7 +1265,7 @@ async function handleFolderSelect(sourceFolder) {
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
-      renderFolderSidebar();
+      syncFolderSidebarState();
       await Promise.all([
         refreshFolderState(),
         refreshVersionState(),
@@ -1200,13 +1274,13 @@ async function handleFolderSelect(sourceFolder) {
     } else {
       folderSelectPending = false;
       selectedSourceFolder = previousSourceFolder;
-      renderFolderSidebar();
+      syncFolderSidebarState();
       setLaunchStatus(result.message || "未找到游戏文件", true);
     }
   } catch (error) {
     folderSelectPending = false;
     selectedSourceFolder = previousSourceFolder;
-    renderFolderSidebar();
+    syncFolderSidebarState();
     setLaunchStatus(error?.message || "切换失败", true);
   }
 }
@@ -1460,6 +1534,16 @@ function bootstrapApp() {
 bootstrapApp();
 
 function setLaunchStatus(message, isError = false) {
+  if (
+    message === lastLaunchStatusMessage &&
+    isError === lastLaunchStatusError
+  ) {
+    return;
+  }
+
+  lastLaunchStatusMessage = message;
+  lastLaunchStatusError = isError;
+
   if (message) {
     launchStatus.textContent = message;
     launchStatus.classList.toggle("is-error", isError);
@@ -1471,6 +1555,12 @@ function setLaunchStatus(message, isError = false) {
 
 function updateLaunchRing(progress) {
   const clamped = Math.max(0, Math.min(100, Number(progress) || 0));
+
+  if (clamped === lastRingProgress) {
+    return;
+  }
+
+  lastRingProgress = clamped;
   const circumference = 2 * Math.PI * 24;
 
   launchRingFill.style.strokeDashoffset = String(
@@ -1572,26 +1662,30 @@ async function pollLaunchStatus() {
     const status = await window.pywebview.api.get_launch_status();
     const progress = Number(status.progress || 0);
     const hasError = Boolean(status.error);
+    let nextGameRunning;
 
     if (hasError) {
       stopRequested = false;
-      isGameRunning = false;
+      nextGameRunning = false;
     } else if (stopRequested) {
       if (!status.running && (progress === 0 || progress >= 100)) {
         stopRequested = false;
       }
-      isGameRunning = false;
+      nextGameRunning = false;
     } else {
       const idle = !status.running && progress === 0;
       const exited = !status.running && progress >= 100;
-      isGameRunning = !idle && !exited;
+      nextGameRunning = !idle && !exited;
     }
 
-    playButton.classList.toggle("is-running", isGameRunning);
-    playButton.setAttribute(
-      "aria-label",
-      isGameRunning ? "关闭游戏" : "开始游戏"
-    );
+    if (nextGameRunning !== isGameRunning) {
+      isGameRunning = nextGameRunning;
+      playButton.classList.toggle("is-running", isGameRunning);
+      playButton.setAttribute(
+        "aria-label",
+        isGameRunning ? "关闭游戏" : "开始游戏"
+      );
+    }
     if (!downloadRingVisible) {
       updateLaunchRing(status.progress || 0);
 
