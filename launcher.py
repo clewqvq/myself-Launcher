@@ -1,9 +1,12 @@
 import base64
+import getpass
+import glob
 import hashlib
 import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -16,9 +19,15 @@ import urllib.parse
 import urllib.request
 import webbrowser
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from pathlib import Path
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 import webview
 
@@ -44,6 +53,24 @@ MINECRAFT_ENTITLEMENTS_URL = (
 BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
 MCIM_BASE = "https://mod.mcimirror.top"
 CURSEFORGE_GAME_ID = 432
+DOWNLOAD_ENDPOINTS = {
+    "manifest": (
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+        f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
+    ),
+    "libraries": (
+        f"{BMCLAPI_BASE}/maven",
+        "https://libraries.minecraft.net",
+    ),
+    "assets": (
+        f"{BMCLAPI_BASE}/assets",
+        "https://resources.download.minecraft.net",
+    ),
+    "maven": (
+        f"{BMCLAPI_BASE}/maven",
+        "https://maven.minecraftforge.net",
+    ),
+}
 MODRINTH_PROJECT_TYPE = {
     "mods": "mod",
     "shaders": "shader",
@@ -54,8 +81,7 @@ JAVA_RUNTIME_MANIFEST_URL = (
     "2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
 )
 VERSION_MANIFEST_URLS = (
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
-    f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json",
+    *DOWNLOAD_ENDPOINTS["manifest"],
 )
 
 
@@ -221,7 +247,7 @@ def _fetch_text_urls(urls, timeout=12):
     raise RuntimeError(f"无法读取下载信息：{last_error}")
 
 
-def _download_urls(urls, target, sha1=""):
+def _download_urls(urls, target, sha1="", progress_callback=None):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -254,12 +280,19 @@ def _download_urls(urls, target, sha1=""):
                     timeout=60,
                     context=_network_context(),
                 ) as response, open(part, "wb") as output:
+                    total_size = int(
+                        response.headers.get("Content-Length") or 0
+                    )
+                    downloaded = 0
                     while True:
                         chunk = response.read(1024 * 1024)
                         if not chunk:
                             break
                         output.write(chunk)
                         digest.update(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback:
+                            progress_callback(downloaded, total_size)
 
                 if sha1 and digest.hexdigest().lower() != sha1.lower():
                     raise RuntimeError("下载文件校验失败")
@@ -277,6 +310,22 @@ def _download_urls(urls, target, sha1=""):
                     time.sleep(0.8)
 
     raise RuntimeError(f"下载失败：{target.name}（{last_error}）")
+
+
+def download(url, dest, expected_sha1=""):
+    return _download_urls(
+        (url,),
+        dest,
+        expected_sha1,
+    )
+
+
+def download_with_fallback(urls, dest, expected_sha1=""):
+    return _download_urls(
+        urls,
+        dest,
+        expected_sha1,
+    )
 
 
 def _download_file(url, target):
@@ -343,6 +392,9 @@ class LaunchState:
         self.message = ""
         self.error = ""
         self.process = None
+        self.state = "idle"
+        self._log_lines = deque(maxlen=500)
+        self._log_revision = 0
 
     def update(self, progress, message, error=""):
         with self._lock:
@@ -350,9 +402,30 @@ class LaunchState:
             self.message = message
             self.error = error
 
+    def set_state(self, state):
+        with self._lock:
+            self.state = state
+
+    def reset_log(self):
+        with self._lock:
+            self._log_lines.clear()
+            self._log_revision += 1
+
+    def append_log(self, line):
+        with self._lock:
+            self._log_lines.append(str(line).rstrip())
+            self._log_revision += 1
+
     def set_process(self, process):
         with self._lock:
             self.process = process
+
+    def get_log(self):
+        with self._lock:
+            return {
+                "revision": self._log_revision,
+                "lines": list(self._log_lines),
+            }
 
     def snapshot(self):
         with self._lock:
@@ -362,6 +435,8 @@ class LaunchState:
                 "message": self.message,
                 "error": self.error,
                 "running": running,
+                "state": self.state,
+                "log_revision": self._log_revision,
             }
 
 
@@ -464,6 +539,9 @@ class Api:
             config_path = base / "MinecraftLauncher" / "config.json"
 
         self.config_path = Path(config_path)
+        self.auth_path = (
+            self.config_path.parent / "accounts" / "auth.json"
+        )
         self.imported_info = None
         self.launch_state = LaunchState()
         self.download_state = DownloadState()
@@ -792,17 +870,95 @@ class Api:
         }
 
     def _read_saved_account(self):
+        account = None
+
+        try:
+            account = json.loads(
+                self.auth_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            account = None
+
+        if not isinstance(account, dict):
+            data = self._read_config()
+            legacy = data.get("account")
+            if isinstance(legacy, dict) and legacy.get("display_name"):
+                account = {
+                    "access_token": legacy.get("access_token", ""),
+                    "refresh_token": legacy.get("refresh_token", ""),
+                    "expires_at": legacy.get("expires_at", 0),
+                    "username": legacy.get("display_name", ""),
+                    "uuid": legacy.get("uuid", ""),
+                }
+                self._save_account(
+                    account,
+                    legacy_avatar=legacy.get("avatar_path", ""),
+                )
+                data.pop("account", None)
+                self._write_config(data)
+
+        if not isinstance(account, dict) or not account.get("username"):
+            return None
+
+        profile = self._read_config().get("account_profile") or {}
+        return {
+            **account,
+            "display_name": account.get("username") or "Player",
+            "avatar_path": profile.get("avatar_path", ""),
+        }
+
+    def _secure_auth_file(self):
+        try:
+            os.chmod(self.auth_path, 0o600)
+        except Exception:
+            pass
+
+        if os.name == "nt":
+            try:
+                user = getpass.getuser()
+                subprocess.run(
+                    [
+                        "icacls",
+                        str(self.auth_path),
+                        "/inheritance:r",
+                        "/grant:r",
+                        f"{user}:F",
+                    ],
+                    capture_output=True,
+                    timeout=15,
+                    creationflags=0,
+                )
+            except Exception:
+                pass
+
+    def _save_account(self, account, legacy_avatar=""):
+        self.auth_path.parent.mkdir(parents=True, exist_ok=True)
+        auth_data = {
+            "access_token": account.get("access_token", ""),
+            "refresh_token": account.get("refresh_token", ""),
+            "expires_at": account.get("expires_at", 0),
+            "username": (
+                account.get("username")
+                or account.get("display_name")
+                or ""
+            ),
+            "uuid": account.get("uuid", ""),
+        }
+        self.auth_path.write_text(
+            json.dumps(auth_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._secure_auth_file()
+
         data = self._read_config()
-        account = data.get("account")
-
-        if isinstance(account, dict) and account.get("display_name"):
-            return account
-
-        return None
-
-    def _save_account(self, account):
-        data = self._read_config()
-        data["account"] = account
+        data["account_profile"] = {
+            "avatar_path": (
+                account.get("avatar_path")
+                or legacy_avatar
+                or ""
+            )
+        }
+        data.pop("account", None)
         self._write_config(data)
         self._account_payload_cache = None
         self._avatar_uri_cache.clear()
@@ -859,12 +1015,19 @@ class Api:
     def logout_account(self):
         data = self._read_config()
         account = data.pop("account", None)
+        profile = data.pop("account_profile", None)
         self._write_config(data)
         self._account_payload_cache = None
         self._avatar_uri_cache.clear()
+        try:
+            self.auth_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
         avatar_path = ""
-        if isinstance(account, dict):
+        if isinstance(profile, dict):
+            avatar_path = profile.get("avatar_path") or ""
+        elif isinstance(account, dict):
             avatar_path = account.get("avatar_path") or ""
 
         if avatar_path:
@@ -884,6 +1047,16 @@ class Api:
 
     def _friendly_auth_error(self, exc):
         text = str(exc)
+        code = getattr(exc, "code", "")
+
+        if code == "expired_token":
+            return "验证码已过期，请重新发起正版验证"
+        if code == "authorization_declined":
+            return "你已取消微软授权"
+        if code == "slow_down":
+            return "微软要求降低轮询频率，请稍候"
+        if code == "authorization_pending":
+            return "等待微软授权"
 
         if "AADSTS700016" in text or "AADSTS7000218" in text:
             return (
@@ -1840,8 +2013,12 @@ class Api:
                 jobs.append(
                     {
                         "urls": (
-                            f"{BMCLAPI_BASE}/maven/{path}",
-                            artifact.get("url", ""),
+                            f"{DOWNLOAD_ENDPOINTS['libraries'][0]}/{path}",
+                            artifact.get("url")
+                            or (
+                                f"{DOWNLOAD_ENDPOINTS['libraries'][1]}"
+                                f"/{path}"
+                            ),
                         ),
                         "target": target,
                         "sha1": artifact.get("sha1", ""),
@@ -1883,8 +2060,15 @@ class Api:
             jobs.append(
                 {
                     "urls": (
-                        f"{BMCLAPI_BASE}/maven/{native_path}",
-                        native_artifact.get("url", ""),
+                        (
+                            f"{DOWNLOAD_ENDPOINTS['libraries'][0]}"
+                            f"/{native_path}"
+                        ),
+                        native_artifact.get("url")
+                        or (
+                            f"{DOWNLOAD_ENDPOINTS['libraries'][1]}"
+                            f"/{native_path}"
+                        ),
                     ),
                     "target": native_target,
                     "sha1": native_artifact.get("sha1", ""),
@@ -1919,9 +2103,9 @@ class Api:
             jobs.append(
                 {
                     "urls": (
-                        f"{BMCLAPI_BASE}/assets/{digest}",
+                        f"{DOWNLOAD_ENDPOINTS['assets'][0]}/{digest}",
                         (
-                            "https://resources.download.minecraft.net/"
+                            f"{DOWNLOAD_ENDPOINTS['assets'][1]}/"
                             f"{digest[:2]}/{digest}"
                         ),
                     ),
@@ -1950,6 +2134,8 @@ class Api:
                         continue
 
                     relative = Path(member.filename)
+                    if relative.parts and relative.parts[0] == "META-INF":
+                        continue
                     if any(
                         relative.match(pattern)
                         for pattern in native.get("exclude", [])
@@ -2042,20 +2228,31 @@ class Api:
         asset_index = version_json.get("assetIndex") or {}
 
         if asset_index.get("url"):
-            asset_index_data = _fetch_json_urls(
-                (asset_index["url"],),
-            )
             index_target = (
                 assets_root / "indexes" / f"{asset_index_id}.json"
             )
-            index_target.parent.mkdir(parents=True, exist_ok=True)
-            index_target.write_text(
-                json.dumps(
-                    asset_index_data,
-                    ensure_ascii=False,
-                    indent=2,
+            _download_urls(
+                (asset_index["url"],),
+                index_target,
+                asset_index.get("sha1", ""),
+            )
+            asset_index_data = json.loads(
+                index_target.read_text(encoding="utf-8")
+            )
+
+        logging_config = (
+            (version_json.get("logging") or {}).get("client") or {}
+        )
+        logging_file = logging_config.get("file") or {}
+        if logging_file.get("url"):
+            _download_urls(
+                (logging_file["url"],),
+                (
+                    assets_root
+                    / "log_configs"
+                    / logging_file.get("id", "client.xml")
                 ),
-                encoding="utf-8",
+                logging_file.get("sha1", ""),
             )
 
         asset_jobs = self._asset_jobs(
@@ -2495,11 +2692,24 @@ class Api:
             if not entry:
                 raise RuntimeError("未找到该 Minecraft 版本")
 
+            version_json_path = (
+                self.config_path.parent
+                / "cache"
+                / "version-json"
+                / f"{version_id}.json"
+            )
             urls = (
                 entry.get("url", ""),
                 f"{BMCLAPI_BASE}/version/{version_id}/json",
             )
-            version_json = _fetch_json_urls(urls)
+            _download_urls(
+                urls,
+                version_json_path,
+                entry.get("sha1", ""),
+            )
+            version_json = json.loads(
+                version_json_path.read_text(encoding="utf-8")
+            )
             game_root = self._download_game_root()
             game_root.mkdir(parents=True, exist_ok=True)
 
@@ -3313,49 +3523,303 @@ class Api:
 
         return java_path
 
-    def _find_java(self, required_major=0):
-        configured_java = self._get_settings().get("java_path")
-        if configured_java and Path(configured_java).exists():
-            configured_path = Path(configured_java)
-            if (
-                not required_major
-                or self._java_major_version(configured_path)
-                >= required_major
+    def _registry_java_homes(self):
+        if winreg is None:
+            return []
+
+        homes = []
+        roots = (
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft"),
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\WOW6432Node\JavaSoft",
+            ),
+        )
+
+        for hive, root in roots:
+            for product in (
+                "Java Runtime Environment",
+                "Java Development Kit",
             ):
-                return configured_path
+                try:
+                    with winreg.OpenKey(hive, f"{root}\\{product}") as key:
+                        current, _ = winreg.QueryValueEx(
+                            key,
+                            "CurrentVersion",
+                        )
+                    with winreg.OpenKey(
+                        hive,
+                        f"{root}\\{product}\\{current}",
+                    ) as key:
+                        home, _ = winreg.QueryValueEx(key, "JavaHome")
+                        homes.append(Path(home))
+                except Exception:
+                    continue
 
-        candidates = [
-            Path(r"I:\hmcl\bin\javaw.exe"),
-            Path(r"I:\hmcl\bin\java.exe"),
-            Path(r"C:\Program Files\Java\latest\bin\javaw.exe"),
-            Path(r"C:\Program Files\Java\latest\bin\java.exe"),
-            Path(r"C:\Program Files\Java\jdk-11\bin\java.exe"),
-        ]
+        return homes
 
+    def _java_candidates(self):
+        candidates = []
+        configured = self._get_settings().get("java_path")
+        if configured:
+            candidates.append(Path(configured))
+
+        java_home = os.environ.get("JAVA_HOME")
+        if java_home:
+            candidates.append(Path(java_home) / "bin" / "java.exe")
+
+        for home in self._registry_java_homes():
+            candidates.append(home / "bin" / "java.exe")
+
+        patterns = (
+            r"C:\Program Files\Eclipse Adoptium\*\bin\java.exe",
+            r"C:\Program Files\Eclipse Foundation\*\bin\java.exe",
+            r"C:\Program Files\Amazon Corretto\*\bin\java.exe",
+            r"C:\Program Files\Microsoft\jdk-*\bin\java.exe",
+            r"C:\Program Files\Zulu\*\bin\java.exe",
+            r"C:\Program Files\BellSoft\*\bin\java.exe",
+            r"C:\Program Files\Java\*\bin\java.exe",
+            r"C:\Program Files\*\bin\java.exe",
+            r"I:\hmcl\bin\java.exe",
+            r"I:\ModrinthApp\meta\java_versions\*\bin\java.exe",
+        )
+
+        for pattern in patterns:
+            candidates.extend(
+                Path(path)
+                for path in glob.glob(pattern)
+            )
+
+        candidates.extend(
+            Path(path)
+            for path in glob.glob(
+                str(
+                    self.config_path.parent
+                    / "runtime"
+                    / "*"
+                    / "bin"
+                    / "java.exe"
+                )
+            )
+        )
+
+        which = shutil.which("javaw") or shutil.which("java")
+        if which:
+            candidates.append(Path(which))
+
+        unique = []
+        seen = set()
         for candidate in candidates:
-            if candidate.exists() and (
-                not required_major
-                or self._java_major_version(candidate)
-                >= required_major
-            ):
-                return candidate
+            try:
+                key = str(candidate.resolve()).lower()
+            except Exception:
+                key = str(candidate).lower()
+            if key in seen or not candidate.exists():
+                continue
+            seen.add(key)
+            unique.append(candidate)
+
+        return unique
+
+    def _java_label(self, java_path):
+        text = str(java_path).lower()
+        if "minecraftlauncher" in text and "runtime" in text:
+            return "Mojang"
+        labels = (
+            ("temurin", "Temurin"),
+            ("adoptium", "Temurin"),
+            ("corretto", "Corretto"),
+            ("microsoft", "Microsoft"),
+            ("zulu", "Zulu"),
+            ("bellsoft", "Liberica"),
+            ("hmcl", "HMCL"),
+        )
+        for needle, label in labels:
+            if needle in text:
+                return label
+        return "Java"
+
+    def get_java_status(self, version_id=""):
+        required = 0
+
+        info = None
+        if version_id:
+            info = self._build_import_info(
+                self._download_game_root(),
+                version_id=version_id,
+            )
+        if not info:
+            info = self.imported_info or self._load_imported_info()
+
+        if info:
+            try:
+                data = json.loads(
+                    Path(info["version_json"]).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                required = int(
+                    (data.get("javaVersion") or {}).get(
+                        "majorVersion"
+                    )
+                    or 0
+                )
+            except Exception:
+                required = 0
+
+        records = []
+        for candidate in self._java_candidates():
+            major = self._java_major_version(candidate)
+            if major:
+                records.append((major, candidate))
+
+        if required:
+            exact = [item for item in records if item[0] == required]
+            if exact:
+                major, path = exact[0]
+                return {
+                    "ok": True,
+                    "state": "exact",
+                    "required": required,
+                    "major": major,
+                    "path": str(path),
+                    "label": self._java_label(path),
+                    "message": (
+                        f"已找到 Java {major} "
+                        f"({self._java_label(path)})"
+                    ),
+                }
+
+            higher = sorted(
+                (item for item in records if item[0] > required),
+                key=lambda item: item[0],
+            )
+            if higher:
+                major, path = higher[0]
+                return {
+                    "ok": True,
+                    "state": "higher",
+                    "required": required,
+                    "major": major,
+                    "path": str(path),
+                    "label": self._java_label(path),
+                    "message": (
+                        f"需要 Java {required}，当前将使用 Java "
+                        f"{major} ({self._java_label(path)})"
+                    ),
+                }
+
+            lower = sorted(
+                (item for item in records if item[0] < required),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if lower:
+                major, path = lower[0]
+                return {
+                    "ok": True,
+                    "state": "lower",
+                    "required": required,
+                    "major": major,
+                    "path": str(path),
+                    "label": self._java_label(path),
+                    "message": (
+                        f"需要 Java {required}，当前仅有 Java "
+                        f"{major}，可能导致无法启动"
+                    ),
+                }
+
+            return {
+                "ok": False,
+                "state": "missing",
+                "required": required,
+                "message": f"需要 Java {required}，点击安装",
+                "install_url": (
+                    "https://adoptium.net/temurin/releases/"
+                    f"?version={required}&os=windows&arch=x64"
+                ),
+            }
+
+        if records:
+            major, path = records[0]
+            return {
+                "ok": True,
+                "state": "available",
+                "required": 0,
+                "major": major,
+                "path": str(path),
+                "label": self._java_label(path),
+                "message": (
+                    f"已找到 Java {major} ({self._java_label(path)})"
+                ),
+            }
+
+        return {
+            "ok": False,
+            "state": "missing",
+            "required": 0,
+            "message": "未找到 Java",
+            "install_url": (
+                "https://adoptium.net/temurin/releases/"
+                "?os=windows&arch=x64"
+            ),
+        }
+
+    def install_java(self, version_id=""):
+        status = self.get_java_status(version_id)
+        required = int(status.get("required") or 0)
+
+        if not required:
+            return status
+        if status.get("state") in ("exact", "higher"):
+            return status
+
+        try:
+            java = self._ensure_java_runtime("", required)
+            return {
+                **self.get_java_status(version_id),
+                "path": str(java),
+                "message": f"Java {required} 已安装",
+            }
+        except Exception as exc:
+            return {
+                **status,
+                "ok": False,
+                "error": str(exc),
+            }
+
+    def _find_java(self, required_major=0):
+        records = []
+
+        for candidate in self._java_candidates():
+            major = self._java_major_version(candidate)
+            if major:
+                records.append((major, candidate))
 
         if required_major:
+            exact = [item for item in records if item[0] == required_major]
+            if exact:
+                return exact[0][1]
+
+            higher = sorted(
+                (item for item in records if item[0] > required_major),
+                key=lambda item: item[0],
+            )
+            if higher:
+                return higher[0][1]
+
             runtime = self._ensure_java_runtime("", required_major)
             if runtime:
                 return runtime
 
-        which = shutil.which("javaw") or shutil.which("java")
-        if not which:
-            return None
+            lower = sorted(
+                (item for item in records if item[0] < required_major),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            return lower[0][1] if lower else None
 
-        fallback = Path(which)
-        if required_major and self._java_major_version(
-            fallback
-        ) < required_major:
-            return None
-
-        return fallback
+        return records[0][1] if records else None
 
     def _build_launch_command(self, info):
         version_json = json.loads(
@@ -3365,6 +3829,9 @@ class Api:
         classpath = [info["version_jar"]]
 
         for library in version_json.get("libraries", []):
+            if not self._library_allowed(library):
+                continue
+
             name_parts = str(library.get("name", "")).split(":")
             if (
                 len(name_parts) > 3
@@ -3416,7 +3883,7 @@ class Api:
             username = premium_account.get("display_name") or info["username"]
             profile_id = premium_account.get("uuid") or info["uuid"]
             access_token = premium_account.get("access_token", "0")
-            client_id = "MinecraftLauncher"
+            client_id = ""
             xuid = ""
             user_type = "msa"
         else:
@@ -3427,42 +3894,52 @@ class Api:
             xuid = ""
             user_type = "legacy"
 
-        if (
-            "forge" in str(info["version_id"]).lower()
-            or "forge" in str(info["main_class"]).lower()
-        ):
-            arguments = version_json.get("arguments") or {}
-            values = {
-                "auth_player_name": username,
-                "version_name": info["version_id"],
-                "game_directory": info["version_folder"],
-                "assets_root": info["assets_root"],
-                "assets_index_name": info["asset_index"],
-                "auth_uuid": profile_id,
-                "auth_access_token": access_token,
-                "clientid": client_id,
-                "auth_xuid": xuid,
-                "user_type": user_type,
-                "version_type": "release",
-                "natives_directory": natives,
-                "launcher_name": "MinecraftLauncher",
-                "launcher_version": "1.0",
-                "classpath": os.pathsep.join(classpath),
-                "classpath_separator": os.pathsep,
-                "library_directory": str(libraries_root),
-            }
+        variables = {
+            "auth_player_name": username,
+            "version_name": info["version_id"],
+            "game_directory": info["version_folder"],
+            "assets_root": info["assets_root"],
+            "game_assets": info["assets_root"],
+            "assets_index_name": info["asset_index"],
+            "auth_uuid": profile_id,
+            "auth_access_token": access_token,
+            "auth_session": access_token,
+            "clientid": client_id,
+            "auth_xuid": xuid,
+            "user_type": user_type,
+            "version_type": "release",
+            "natives_directory": natives,
+            "launcher_name": "MinecraftLauncher",
+            "launcher_version": "1.0",
+            "classpath": os.pathsep.join(classpath),
+            "classpath_separator": os.pathsep,
+            "library_directory": str(libraries_root),
+            "resolution_width": "854",
+            "resolution_height": "480",
+        }
+        arguments = version_json.get("arguments") or {}
+        has_modern_arguments = bool(
+            arguments.get("jvm") or arguments.get("game")
+        )
+
+        if has_modern_arguments:
             jvm_args = self._resolve_version_arguments(
                 arguments.get("jvm", []),
-                values,
-            )
-            jvm_args.insert(
-                0,
-                f"-DlegacyClassPath={os.pathsep.join(classpath)}",
+                variables,
             )
             game_args = self._resolve_version_arguments(
                 arguments.get("game", []),
-                values,
+                variables,
             )
+
+            if (
+                "forge" in str(info["version_id"]).lower()
+                or "forge" in str(info["main_class"]).lower()
+            ):
+                jvm_args.insert(
+                    0,
+                    f"-DlegacyClassPath={os.pathsep.join(classpath)}",
+                )
 
             return [
                 str(java),
@@ -3472,6 +3949,35 @@ class Api:
                 info["main_class"],
                 *game_args,
             ], Path(info["version_folder"])
+
+        minecraft_arguments = version_json.get("minecraftArguments")
+        if minecraft_arguments:
+            game_args = [
+                self._expand_version_argument(
+                    value,
+                    variables,
+                )
+                for value in shlex.split(minecraft_arguments)
+            ]
+            return [
+                str(java),
+                f"-Xms{min(memory_mb, 1024)}m",
+                f"-Xmx{memory_mb}m",
+                f"-Djava.library.path={natives}",
+                f"-Djna.tmpdir={natives}",
+                f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
+                f"-Dio.netty.native.workdir={natives}",
+                "-cp",
+                os.pathsep.join(classpath),
+                info["main_class"],
+                *game_args,
+            ], Path(info["version_folder"])
+
+        if (
+            "forge" in str(info["version_id"]).lower()
+            or "forge" in str(info["main_class"]).lower()
+        ):
+            raise RuntimeError("Forge 版本缺少启动参数")
 
         args = [
             str(java),
@@ -3590,6 +4096,8 @@ class Api:
             return {"ok": False, "message": "游戏已经在启动"}
 
         self.imported_info = info
+        self.launch_state.reset_log()
+        self.launch_state.set_state("launching")
         self.launch_state.update(2, "准备启动")
         thread = threading.Thread(
             target=self._launch_worker,
@@ -3606,6 +4114,7 @@ class Api:
         if process is None or process.poll() is not None:
             return {"ok": False, "message": "游戏未在运行"}
 
+        self.launch_state.set_state("stopping")
         self.launch_state.update(95, "正在关闭游戏")
         thread = threading.Thread(
             target=self._stop_worker,
@@ -3621,7 +4130,7 @@ class Api:
             process.terminate()
 
             try:
-                process.wait(timeout=8)
+                process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
@@ -3631,13 +4140,40 @@ class Api:
             except Exception:
                 pass
 
+        self.launch_state.set_state("stopped")
         self.launch_state.update(0, "游戏已关闭")
 
     def get_launch_status(self):
-        return self.launch_state.snapshot()
+        snapshot = self.launch_state.snapshot()
+        if (
+            snapshot["state"] == "running"
+            and not snapshot["running"]
+        ):
+            self.launch_state.set_state("stopped")
+            snapshot["state"] = "stopped"
+        return snapshot
+
+    def get_launch_log(self):
+        return self.launch_state.get_log()
+
+    def _stream_process_output(self, process, log_path):
+        try:
+            with open(
+                log_path,
+                "a",
+                encoding="utf-8",
+                errors="replace",
+            ) as log:
+                for line in process.stdout:
+                    log.write(line)
+                    log.flush()
+                    self.launch_state.append_log(line)
+        except Exception as exc:
+            self.launch_state.append_log(f"[launcher] 日志读取失败：{exc}")
 
     def _launch_worker(self, info):
         try:
+            self.launch_state.set_state("launching")
             self.launch_state.update(8, "正在解析版本配置")
             json.loads(Path(info["version_json"]).read_text(encoding="utf-8"))
 
@@ -3660,23 +4196,35 @@ class Api:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             creationflags = 0
 
-            with open(log_path, "a", encoding="utf-8", errors="replace") as log:
-                process = subprocess.Popen(
-                    args,
-                    cwd=str(cwd),
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    creationflags=creationflags,
-                )
+            process = subprocess.Popen(
+                args,
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+            )
 
             self.launch_state.set_process(process)
+            self.launch_state.set_state("running")
+            self.launch_state.update(100, "游戏已启动")
+
             if self._get_settings().get("minimize_on_launch"):
                 try:
                     webview.windows[0].minimize()
                 except Exception:
                     pass
-            self.launch_state.update(100, "游戏已启动")
+
+            threading.Thread(
+                target=self._stream_process_output,
+                args=(process, log_path),
+                daemon=True,
+            ).start()
         except Exception as exc:
+            self.launch_state.set_state("stopped")
             self.launch_state.update(0, "启动失败", str(exc))
 
 

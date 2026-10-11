@@ -64,6 +64,7 @@ def main():
     failures = []
     forbidden_names = {
         "config.json",
+        "auth.json",
         "launcher_profiles.json",
         "avatar.png",
     }

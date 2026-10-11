@@ -160,6 +160,9 @@
           <circle class="launch-ring-fill" cx="36" cy="36" r="24"></circle>
         </svg>
         <span class="launch-status" aria-live="polite"></span>
+        <div class="launch-log-panel" hidden>
+          <pre class="launch-log-output"></pre>
+        </div>
       </section>
 
       <section class="version-view" aria-label="版本界面">
@@ -360,6 +363,11 @@
                       type="button"
                     >浏览</button>
                   </div>
+                  <span
+                    class="settings-java-status"
+                    role="button"
+                    tabindex="0"
+                  >正在检测 Java...</span>
                 </div>
 
                 <div class="settings-row">

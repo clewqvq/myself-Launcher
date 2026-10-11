@@ -23,7 +23,7 @@
 ## 打包
 
 ```powershell
-.venv\bin\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name MinecraftLauncher --add-data "index.html;." --add-data "styles.css;." --add-data "script.js;." --add-data "assets/player-avatar.png;assets" launcher.py
+.venv\bin\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name MinecraftLauncher --add-data "index.html;." --add-data "styles.css;." --add-data "script.js;." --add-data "assets/player-avatar.png;assets" launcher.py
 ```
 
 ## 发布安全

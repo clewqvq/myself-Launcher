@@ -9,6 +9,8 @@ const playButton = document.querySelector(".play-button");
 const launchRingFill = document.querySelector(".launch-ring-fill");
 const launchRingButton = document.querySelector(".launch-ring-button");
 const launchStatus = document.querySelector(".launch-status");
+const launchLogPanel = document.querySelector(".launch-log-panel");
+const launchLogOutput = document.querySelector(".launch-log-output");
 const folderList = document.querySelector(".folder-list");
 const versionList = document.querySelector(".version-list");
 const downloadView = document.querySelector(".download-view");
@@ -102,6 +104,9 @@ const settingsPersonalizationPanel = document.querySelector(
   ".settings-personalization-panel"
 );
 const settingsJavaPath = document.querySelector(".settings-java-path");
+const settingsJavaStatus = document.querySelector(
+  ".settings-java-status"
+);
 const settingsMemory = document.querySelector(".settings-memory");
 const settingsDefaultVersion = document.querySelector(
   ".settings-default-version"
@@ -156,6 +161,8 @@ let lastLaunchStatusMessage = null;
 let lastLaunchStatusError = null;
 let lastDownloadProgress = null;
 let lastDownloadMessage = null;
+let lastLaunchLogRevision = -1;
+let currentJavaStatus = null;
 let contentSearchPage = 1;
 let contentSearchHasMore = false;
 let contentSearchPending = false;
@@ -389,6 +396,63 @@ async function loadSettings() {
   applySettings(settings);
 }
 
+function renderJavaStatus(status) {
+  currentJavaStatus = status;
+  settingsJavaStatus.textContent = status?.message || "未找到 Java";
+  settingsJavaStatus.classList.toggle(
+    "is-ok",
+    status?.state === "exact" || status?.state === "higher"
+  );
+  settingsJavaStatus.classList.toggle(
+    "is-warning",
+    status?.state === "lower" || status?.state === "missing"
+  );
+  settingsJavaStatus.title =
+    status?.state === "missing" ? "点击安装 Java" : "";
+}
+
+async function refreshJavaStatus() {
+  if (!window.pywebview?.api?.get_java_status) {
+    return;
+  }
+
+  try {
+    const status = await window.pywebview.api.get_java_status(
+      selectedVersionId || currentVersion
+    );
+    renderJavaStatus(status);
+  } catch {
+    renderJavaStatus({
+      state: "missing",
+      message: "Java 状态检测失败",
+    });
+  }
+}
+
+async function installRequiredJava() {
+  if (
+    !currentJavaStatus ||
+    currentJavaStatus.state !== "missing" ||
+    !window.pywebview?.api?.install_java
+  ) {
+    return;
+  }
+
+  settingsJavaStatus.textContent = "正在安装 Java...";
+
+  try {
+    const status = await window.pywebview.api.install_java(
+      selectedVersionId || currentVersion
+    );
+    renderJavaStatus(status);
+  } catch (error) {
+    renderJavaStatus({
+      state: "missing",
+      message: error?.message || "Java 安装失败",
+    });
+  }
+}
+
 async function saveSettings() {
   const settings = {
     java_path: settingsJavaPath.value.trim(),
@@ -489,6 +553,7 @@ function openSettings() {
   activateSettingsTab("general");
   launcher.dataset.view = "settings";
   loadSettings();
+  refreshJavaStatus();
 }
 
 const DOWNLOAD_CATEGORY_LABELS = {
@@ -1385,6 +1450,7 @@ async function loadAppState() {
         }
       }),
       loadAccount(),
+      refreshJavaStatus(),
     ]);
   } catch {
     // Ignore transient startup failures; the UI keeps its default state.
@@ -1426,6 +1492,7 @@ async function handleVersionSelect(versionId) {
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
+      refreshJavaStatus();
       syncVersionSidebarState();
       await refreshVersionState();
       setLaunchStatus(result.message || "已切换版本");
@@ -1475,6 +1542,7 @@ async function handleFolderSelect(sourceFolder) {
       currentVersion =
         result.display_name || result.version_id || currentVersion;
       renderVersion(currentVersion);
+      refreshJavaStatus();
       syncFolderSidebarState();
       await Promise.all([
         refreshFolderState(),
@@ -1691,6 +1759,13 @@ settingsNavItems.forEach((item) => {
 settingsBrowseButton.addEventListener("click", handleBrowseJava);
 settingsWallpaperButton.addEventListener("click", handleChangeWallpaper);
 saveSettingsButton.addEventListener("click", saveSettings);
+settingsJavaStatus.addEventListener("click", installRequiredJava);
+settingsJavaStatus.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    installRequiredJava();
+  }
+});
 
 settingsDarkMode.addEventListener("change", () => {
   document.documentElement.dataset.theme = settingsDarkMode.checked
@@ -1889,6 +1964,34 @@ async function handlePlayButton() {
   await handleLaunch();
 }
 
+async function updateLaunchLog(status) {
+  const shouldShow =
+    status.state === "launching" ||
+    status.state === "running" ||
+    status.state === "stopping";
+
+  if (shouldShow) {
+    launchLogPanel.hidden = false;
+  }
+
+  if (!window.pywebview?.api?.get_launch_log) {
+    return;
+  }
+
+  try {
+    const log = await window.pywebview.api.get_launch_log();
+    if (log.revision === lastLaunchLogRevision) {
+      return;
+    }
+
+    lastLaunchLogRevision = log.revision;
+    launchLogOutput.textContent = (log.lines || []).join("\n");
+    launchLogOutput.scrollTop = launchLogOutput.scrollHeight;
+  } catch {
+    // Ignore transient log polling failures.
+  }
+}
+
 async function pollLaunchStatus() {
   if (!window.pywebview?.api?.get_launch_status) {
     return;
@@ -1931,6 +2034,8 @@ async function pollLaunchStatus() {
         setLaunchStatus(status.message);
       }
     }
+
+    await updateLaunchLog(status);
   } catch {
     // Ignore transient polling failures.
   }
