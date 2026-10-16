@@ -2890,51 +2890,93 @@ class Api:
         ]
 
         for key in keys:
-            if key in self._translation_cache:
-                return self._translation_cache[key]
+            cached = self._translation_cache.get(key)
+            if cached:
+                return cached
 
-        for query in (slug, title):
-            if not query:
+        queries = []
+
+        for value in (slug, title):
+            text = str(value or "").strip()
+            if text and text not in queries:
+                queries.append(text)
+
+        for query in queries:
+            for attempt in range(2):
+                try:
+                    url = (
+                        "https://www.mcmod.cn/s?key="
+                        + urllib.parse.quote(query)
+                    )
+                    html = _fetch_text_urls((url,), timeout=10)
+                except Exception:
+                    html = ""
+
+                names = self._mcmod_candidates(html) if html else []
+
+                if names:
+                    translation = self._mcmod_chinese_name(
+                        names,
+                        title or query,
+                        slug or query,
+                    )
+                    if translation:
+                        for key in keys:
+                            self._translation_cache[key] = translation
+                        return translation
+                    # 页面正常但没有中文名，不再重试
+                    break
+
+                if attempt == 0:
+                    time.sleep(0.4)
+
+        return ""
+
+    @staticmethod
+    def _mcmod_candidates(html):
+        entries = re.findall(
+            (
+                r'href="(?:https?:)?//www\.mcmod\.cn/class/'
+                r'\d+\.html"[^>]*>(.*?)</a>'
+            ),
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+        names = []
+
+        for raw in entries:
+            text = unescape(re.sub(r"<[^>]+>", " ", raw))
+            text = re.sub(r"\s+", " ", text).strip()
+            if text and not text.startswith("www.mcmod.cn"):
+                names.append(text)
+
+        return names
+
+    @staticmethod
+    def _mcmod_chinese_name(names, title, slug):
+        target = re.sub(r"[^a-z0-9]", "", str(title or "").lower())
+        slug_target = re.sub(r"[^a-z0-9]", "", str(slug or "").lower())
+
+        for candidate in names:
+            key = re.sub(r"[^a-z0-9]", "", candidate.lower())
+
+            if (
+                target
+                and target not in key
+                and (not slug_target or slug_target not in key)
+            ):
                 continue
 
-            try:
-                url = (
-                    "https://www.mcmod.cn/s?key="
-                    + urllib.parse.quote(str(query))
-                )
-                html = _fetch_text_urls((url,), timeout=10)
-                match = re.search(
-                    (
-                        r'<div class="result-item">.*?'
-                        r'<div class="head">.*?'
-                        r'<a[^>]+href="(?:https?:)?//'
-                        r'www\.mcmod\.cn/class/\d+\.html"[^>]*>'
-                        r"(.*?)</a>"
-                    ),
-                    html,
-                    flags=re.IGNORECASE | re.DOTALL,
-                )
+            name = candidate.split("(", 1)[0].strip()
 
-                if not match:
-                    continue
+            if name.startswith("[") and "]" in name:
+                name = name.split("]", 1)[1].strip()
 
-                raw_title = unescape(
-                    re.sub(r"<[^>]+>", " ", match.group(1))
-                )
-                raw_title = re.sub(r"\s+", " ", raw_title).strip()
-                translation = raw_title.split("(", 1)[0].strip()
+            if name and re.search(r"[\u4e00-\u9fff]", name):
+                return name
 
-                if translation.startswith("[") and "]" in translation:
-                    translation = translation.split("]", 1)[1].strip()
-
-                if translation:
-                    for key in keys:
-                        self._translation_cache[key] = translation
-                    return translation
-            except Exception:
-                continue
-
-        return str(title or slug or "未译名")
+        return ""
 
     @staticmethod
     def _minecraft_version(version_data, version_id):
@@ -3250,11 +3292,9 @@ class Api:
         def translate(entry):
             key, (title, slug) = entry
             translation = self._mcmod_translation(title, slug)
-            if not translation or translation.lower() == title.lower():
-                return key, ""
-            return key, translation
+            return key, translation or ""
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
                 executor.submit(translate, entry)
                 for entry in unique.items()
@@ -3454,6 +3494,11 @@ class Api:
 
             translation = self._mcmod_translation(title, slug)
             english_name = self._safe_content_name(slug or title)
+            prefix = (
+                f"[{self._safe_content_name(translation)}]"
+                if translation
+                else ""
+            )
             suffix = Path(file_info.get("file_name", "")).suffix
             if not suffix:
                 suffix = Path(
@@ -3484,8 +3529,8 @@ class Api:
             target_folder.mkdir(parents=True, exist_ok=True)
 
             filename = (
-                f"[{self._safe_content_name(translation)}]"
-                f"{english_name}-{game_version}-{file_version}{suffix}"
+                f"{prefix}{english_name}-{game_version}-"
+                f"{file_version}{suffix}"
             )
             target = target_folder / filename
             self.download_state.update(
