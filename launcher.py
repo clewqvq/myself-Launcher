@@ -192,6 +192,14 @@ def _network_context():
     return ssl.create_default_context(cafile=certifi.where())
 
 
+def _hidden_process_kwargs():
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {
+            "creationflags": subprocess.CREATE_NO_WINDOW,
+        }
+    return {}
+
+
 def _fetch_json_urls(urls, timeout=12):
     last_error = None
 
@@ -554,6 +562,10 @@ class Api:
         self._manifest_cache = None
         self._manifest_cache_time = 0
         self._translation_cache = {}
+        self._java_version_cache = {}
+        self._java_choice_cache = {}
+        self._java_candidates_cache = None
+        self._java_candidates_cache_time = 0
 
     def _read_config(self):
         if self._config_cache is not None:
@@ -817,6 +829,8 @@ class Api:
         data["settings"] = saved
         self._write_config(data)
         self._wallpaper_uri_cache.clear()
+        self._java_choice_cache.clear()
+        self._java_candidates_cache = None
         return {**saved, "ok": True, "message": "设置已保存"}
 
     def browse_java(self):
@@ -926,7 +940,7 @@ class Api:
                     ],
                     capture_output=True,
                     timeout=15,
-                    creationflags=0,
+                    **_hidden_process_kwargs(),
                 )
             except Exception:
                 pass
@@ -2505,7 +2519,7 @@ class Api:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 timeout=600,
-                creationflags=0,
+                **_hidden_process_kwargs(),
             )
 
         if result.returncode != 0:
@@ -3396,12 +3410,17 @@ class Api:
             self.download_state.fail(exc)
 
     def _java_major_version(self, java_path):
+        cache_key = str(java_path)
+        cached = self._java_version_cache.get(cache_key)
+        if cached and time.time() - cached[0] < 300:
+            return cached[1]
+
         try:
             result = subprocess.run(
                 [str(java_path), "-version"],
                 capture_output=True,
                 timeout=8,
-                creationflags=0,
+                **_hidden_process_kwargs(),
             )
             output = (
                 result.stdout + result.stderr
@@ -3412,13 +3431,16 @@ class Api:
             )
 
             if not match:
+                self._java_version_cache[cache_key] = (time.time(), 0)
                 return 0
 
             major = int(match.group(1))
             if major == 1 and match.group(2):
-                return int(match.group(2))
+                major = int(match.group(2))
+            self._java_version_cache[cache_key] = (time.time(), major)
             return major
         except Exception:
+            self._java_version_cache[cache_key] = (time.time(), 0)
             return 0
 
     def _ensure_java_runtime(self, component, required_major):
@@ -3559,6 +3581,12 @@ class Api:
         return homes
 
     def _java_candidates(self):
+        if (
+            self._java_candidates_cache is not None
+            and time.time() - self._java_candidates_cache_time < 60
+        ):
+            return self._java_candidates_cache
+
         candidates = []
         configured = self._get_settings().get("java_path")
         if configured:
@@ -3619,6 +3647,8 @@ class Api:
             seen.add(key)
             unique.append(candidate)
 
+        self._java_candidates_cache = unique
+        self._java_candidates_cache_time = time.time()
         return unique
 
     def _java_label(self, java_path):
@@ -3776,6 +3806,9 @@ class Api:
 
         try:
             java = self._ensure_java_runtime("", required)
+            self._java_candidates_cache = None
+            self._java_choice_cache.clear()
+            self._java_version_cache.pop(str(java), None)
             return {
                 **self.get_java_status(version_id),
                 "path": str(java),
@@ -3789,6 +3822,17 @@ class Api:
             }
 
     def _find_java(self, required_major=0):
+        cached = self._java_choice_cache.get(required_major)
+        if (
+            cached
+            and Path(cached).exists()
+            and time.time() - self._java_choice_cache.get(
+                f"{required_major}:time",
+                time.time(),
+            ) < 300
+        ):
+            return Path(cached)
+
         records = []
 
         for candidate in self._java_candidates():
@@ -3799,17 +3843,25 @@ class Api:
         if required_major:
             exact = [item for item in records if item[0] == required_major]
             if exact:
-                return exact[0][1]
+                chosen = exact[0][1]
+                self._java_choice_cache[required_major] = str(chosen)
+                self._java_choice_cache[f"{required_major}:time"] = time.time()
+                return chosen
 
             higher = sorted(
                 (item for item in records if item[0] > required_major),
                 key=lambda item: item[0],
             )
             if higher:
-                return higher[0][1]
+                chosen = higher[0][1]
+                self._java_choice_cache[required_major] = str(chosen)
+                self._java_choice_cache[f"{required_major}:time"] = time.time()
+                return chosen
 
             runtime = self._ensure_java_runtime("", required_major)
             if runtime:
+                self._java_choice_cache[required_major] = str(runtime)
+                self._java_choice_cache[f"{required_major}:time"] = time.time()
                 return runtime
 
             lower = sorted(
@@ -3817,9 +3869,44 @@ class Api:
                 key=lambda item: item[0],
                 reverse=True,
             )
-            return lower[0][1] if lower else None
+            if lower:
+                chosen = lower[0][1]
+                self._java_choice_cache[required_major] = str(chosen)
+                self._java_choice_cache[f"{required_major}:time"] = time.time()
+                return chosen
+            return None
 
-        return records[0][1] if records else None
+        if records:
+            chosen = records[0][1]
+            self._java_choice_cache[required_major] = str(chosen)
+            self._java_choice_cache[f"{required_major}:time"] = time.time()
+            return chosen
+        return None
+
+    @staticmethod
+    def _performance_jvm_args(memory_mb):
+        return [
+            f"-Xms{min(memory_mb, 2048)}m",
+            f"-Xmx{memory_mb}m",
+            "-XX:+UseG1GC",
+            "-XX:+ParallelRefProcEnabled",
+            "-XX:MaxGCPauseMillis=200",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+DisableExplicitGC",
+            "-XX:G1NewSizePercent=30",
+            "-XX:G1MaxNewSizePercent=40",
+            "-XX:G1HeapRegionSize=8M",
+            "-XX:G1ReservePercent=20",
+            "-XX:G1HeapWastePercent=5",
+            "-XX:G1MixedGCCountTarget=4",
+            "-XX:InitiatingHeapOccupancyPercent=15",
+            "-XX:G1MixedGCLiveThresholdPercent=90",
+            "-XX:G1RSetUpdatingPauseTimePercent=5",
+            "-XX:SurvivorRatio=32",
+            "-XX:MaxTenuringThreshold=1",
+            "-Dusing.aikars.flags=https://mcflags.emc.gs",
+            "-Daikars.new.flags=true",
+        ]
 
     def _build_launch_command(self, info):
         version_json = json.loads(
@@ -3943,8 +4030,7 @@ class Api:
 
             return [
                 str(java),
-                f"-Xms{min(memory_mb, 1024)}m",
-                f"-Xmx{memory_mb}m",
+                *self._performance_jvm_args(memory_mb),
                 *jvm_args,
                 info["main_class"],
                 *game_args,
@@ -3961,8 +4047,7 @@ class Api:
             ]
             return [
                 str(java),
-                f"-Xms{min(memory_mb, 1024)}m",
-                f"-Xmx{memory_mb}m",
+                *self._performance_jvm_args(memory_mb),
                 f"-Djava.library.path={natives}",
                 f"-Djna.tmpdir={natives}",
                 f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
@@ -3981,8 +4066,7 @@ class Api:
 
         args = [
             str(java),
-            f"-Xms{min(memory_mb, 1024)}m",
-            f"-Xmx{memory_mb}m",
+            *self._performance_jvm_args(memory_mb),
             f"-Djava.library.path={natives}",
             f"-Djna.tmpdir={natives}",
             f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
@@ -4194,7 +4278,7 @@ class Api:
             self.launch_state.update(75, "正在启动 Minecraft")
             log_path = self.config_path.parent / "logs" / "latest.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            creationflags = 0
+            process_kwargs = _hidden_process_kwargs()
 
             process = subprocess.Popen(
                 args,
@@ -4205,7 +4289,7 @@ class Api:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
+                **process_kwargs,
             )
 
             self.launch_state.set_process(process)
