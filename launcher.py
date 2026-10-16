@@ -3669,9 +3669,32 @@ class Api:
                 return label
         return "Java"
 
-    def get_java_status(self, version_id=""):
-        required = 0
+    @staticmethod
+    def _select_java(records, required):
+        if required:
+            exact = [item for item in records if item[0] == required]
+            if exact:
+                return exact[0], "exact"
 
+            higher = sorted(
+                (item for item in records if item[0] > required),
+                key=lambda item: item[0],
+            )
+            if higher:
+                return higher[0], "higher"
+
+            lower = sorted(
+                (item for item in records if item[0] < required),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if lower:
+                return lower[0], "lower"
+            return None, "missing"
+
+        return (records[0], "available") if records else (None, "missing")
+
+    def _required_java(self, version_id=""):
         info = None
         if version_id:
             info = self._build_import_info(
@@ -3681,118 +3704,76 @@ class Api:
         if not info:
             info = self.imported_info or self._load_imported_info()
 
-        if info:
-            try:
-                data = json.loads(
-                    Path(info["version_json"]).read_text(
-                        encoding="utf-8"
-                    )
-                )
-                required = int(
-                    (data.get("javaVersion") or {}).get(
-                        "majorVersion"
-                    )
-                    or 0
-                )
-            except Exception:
-                required = 0
+        if not info:
+            return 0
 
+        try:
+            data = json.loads(
+                Path(info["version_json"]).read_text(encoding="utf-8")
+            )
+            return int(
+                (data.get("javaVersion") or {}).get("majorVersion")
+                or 0
+            )
+        except Exception:
+            return 0
+
+    def get_java_status(self, version_id=""):
+        required = self._required_java(version_id)
         records = []
         for candidate in self._java_candidates():
             major = self._java_major_version(candidate)
             if major:
                 records.append((major, candidate))
 
-        if required:
-            exact = [item for item in records if item[0] == required]
-            if exact:
-                major, path = exact[0]
-                return {
-                    "ok": True,
-                    "state": "exact",
-                    "required": required,
-                    "major": major,
-                    "path": str(path),
-                    "label": self._java_label(path),
-                    "message": (
-                        f"已找到 Java {major} "
-                        f"({self._java_label(path)})"
-                    ),
-                }
+        selected, state = self._select_java(records, required)
 
-            higher = sorted(
-                (item for item in records if item[0] > required),
-                key=lambda item: item[0],
-            )
-            if higher:
-                major, path = higher[0]
-                return {
-                    "ok": True,
-                    "state": "higher",
-                    "required": required,
-                    "major": major,
-                    "path": str(path),
-                    "label": self._java_label(path),
-                    "message": (
-                        f"需要 Java {required}，当前将使用 Java "
-                        f"{major} ({self._java_label(path)})"
-                    ),
-                }
-
-            lower = sorted(
-                (item for item in records if item[0] < required),
-                key=lambda item: item[0],
-                reverse=True,
-            )
-            if lower:
-                major, path = lower[0]
-                return {
-                    "ok": True,
-                    "state": "lower",
-                    "required": required,
-                    "major": major,
-                    "path": str(path),
-                    "label": self._java_label(path),
-                    "message": (
-                        f"需要 Java {required}，当前仅有 Java "
-                        f"{major}，可能导致无法启动"
-                    ),
-                }
-
+        if not selected:
             return {
                 "ok": False,
                 "state": "missing",
                 "required": required,
-                "message": f"需要 Java {required}，点击安装",
+                "message": (
+                    f"需要 Java {required}，点击安装"
+                    if required
+                    else "未找到 Java"
+                ),
                 "install_url": (
                     "https://adoptium.net/temurin/releases/"
-                    f"?version={required}&os=windows&arch=x64"
+                    + (
+                        f"?version={required}&os=windows&arch=x64"
+                        if required
+                        else "?os=windows&arch=x64"
+                    )
                 ),
             }
 
-        if records:
-            major, path = records[0]
-            return {
-                "ok": True,
-                "state": "available",
-                "required": 0,
-                "major": major,
-                "path": str(path),
-                "label": self._java_label(path),
-                "message": (
-                    f"已找到 Java {major} ({self._java_label(path)})"
-                ),
-            }
+        major, path = selected
+        label = self._java_label(path)
+
+        if state == "exact":
+            message = f"已找到 Java {major} ({label})"
+        elif state == "higher":
+            message = (
+                f"需要 Java {required}，当前将使用 Java "
+                f"{major} ({label})"
+            )
+        elif state == "lower":
+            message = (
+                f"需要 Java {required}，当前仅有 Java "
+                f"{major}，可能导致无法启动"
+            )
+        else:
+            message = f"已找到 Java {major} ({label})"
 
         return {
-            "ok": False,
-            "state": "missing",
-            "required": 0,
-            "message": "未找到 Java",
-            "install_url": (
-                "https://adoptium.net/temurin/releases/"
-                "?os=windows&arch=x64"
-            ),
+            "ok": state in ("exact", "higher", "available"),
+            "state": state,
+            "required": required,
+            "major": major,
+            "path": str(path),
+            "label": label,
+            "message": message,
         }
 
     def install_java(self, version_id=""):
@@ -3840,48 +3821,20 @@ class Api:
             if major:
                 records.append((major, candidate))
 
-        if required_major:
-            exact = [item for item in records if item[0] == required_major]
-            if exact:
-                chosen = exact[0][1]
-                self._java_choice_cache[required_major] = str(chosen)
-                self._java_choice_cache[f"{required_major}:time"] = time.time()
-                return chosen
+        selected, state = self._select_java(records, required_major)
 
-            higher = sorted(
-                (item for item in records if item[0] > required_major),
-                key=lambda item: item[0],
-            )
-            if higher:
-                chosen = higher[0][1]
-                self._java_choice_cache[required_major] = str(chosen)
-                self._java_choice_cache[f"{required_major}:time"] = time.time()
-                return chosen
-
+        if required_major and state == "missing":
             runtime = self._ensure_java_runtime("", required_major)
             if runtime:
-                self._java_choice_cache[required_major] = str(runtime)
-                self._java_choice_cache[f"{required_major}:time"] = time.time()
-                return runtime
+                selected = (required_major, runtime)
 
-            lower = sorted(
-                (item for item in records if item[0] < required_major),
-                key=lambda item: item[0],
-                reverse=True,
-            )
-            if lower:
-                chosen = lower[0][1]
-                self._java_choice_cache[required_major] = str(chosen)
-                self._java_choice_cache[f"{required_major}:time"] = time.time()
-                return chosen
+        if not selected:
             return None
 
-        if records:
-            chosen = records[0][1]
-            self._java_choice_cache[required_major] = str(chosen)
-            self._java_choice_cache[f"{required_major}:time"] = time.time()
-            return chosen
-        return None
+        chosen = selected[1]
+        self._java_choice_cache[required_major] = str(chosen)
+        self._java_choice_cache[f"{required_major}:time"] = time.time()
+        return chosen
 
     @staticmethod
     def _performance_jvm_args(memory_mb):

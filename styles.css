@@ -20,6 +20,17 @@
   --theme-input-highlight: rgba(255 255 255 / 0.86);
   --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-press: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --liquid-blur: 30px;
+  --liquid-saturation: 180%;
+  --liquid-bg:
+    linear-gradient(145deg, rgb(255 255 255 / 0.72), rgb(255 255 255 / 0.34));
+  --liquid-bg-hover:
+    linear-gradient(145deg, rgb(255 255 255 / 0.9), rgb(255 255 255 / 0.52));
+  --liquid-rim: rgb(255 255 255 / 0.8);
+  --liquid-shadow:
+    0 2px 4px rgb(24 36 52 / 0.05),
+    0 12px 24px rgb(24 36 52 / 0.09),
+    0 28px 64px rgb(24 36 52 / 0.12);
 }
 
 [data-theme="dark"] {
@@ -36,6 +47,15 @@
   --theme-placeholder-bg: rgba(255 255 255 / 0.06);
   --theme-toggle-track: rgba(255 255 255 / 0.22);
   --theme-input-highlight: rgba(255 255 255 / 0.08);
+  --liquid-bg:
+    linear-gradient(145deg, rgb(255 255 255 / 0.15), rgb(255 255 255 / 0.045));
+  --liquid-bg-hover:
+    linear-gradient(145deg, rgb(255 255 255 / 0.22), rgb(255 255 255 / 0.08));
+  --liquid-rim: rgb(255 255 255 / 0.22);
+  --liquid-shadow:
+    0 2px 4px rgb(0 0 0 / 0.22),
+    0 14px 30px rgb(0 0 0 / 0.32),
+    0 32px 72px rgb(0 0 0 / 0.36);
 }
 
 * {
@@ -1692,6 +1712,205 @@ button:focus-visible {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Web approximation of Apple's liquid-glass material, not an Apple API. */
+.glass-surface,
+.download-category-sidebar,
+.download-content,
+.settings-sidebar,
+.settings-panel,
+.folder-sidebar,
+.version-sidebar,
+.account-menu,
+.corner-panel,
+.launch-log-panel,
+.launch-status {
+  border-color: var(--liquid-rim);
+  background: var(--liquid-bg), var(--glass-bg);
+  -webkit-backdrop-filter:
+    blur(var(--liquid-blur))
+    saturate(var(--liquid-saturation))
+    contrast(1.04);
+  backdrop-filter:
+    blur(var(--liquid-blur))
+    saturate(var(--liquid-saturation))
+    contrast(1.04);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.72),
+    inset 0 -1px 0 rgb(255 255 255 / 0.16),
+    var(--liquid-shadow);
+  transform: translateZ(0);
+}
+
+button:not(.play-button):not(.launch-ring-button):not(.corner-tile) {
+  border-color: var(--liquid-rim);
+  background: var(--liquid-bg), var(--glass-bg);
+  -webkit-backdrop-filter:
+    blur(22px)
+    saturate(170%)
+    contrast(1.04);
+  backdrop-filter:
+    blur(22px)
+    saturate(170%)
+    contrast(1.04);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.74),
+    inset 0 -1px 0 rgb(255 255 255 / 0.14),
+    0 2px 5px rgb(24 36 52 / 0.06),
+    0 12px 28px rgb(24 36 52 / 0.11);
+}
+
+button:not(.play-button):not(.launch-ring-button):not(.corner-tile):hover {
+  background: var(--liquid-bg-hover), var(--glass-bg-strong);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.92),
+    inset 0 -1px 0 rgb(255 255 255 / 0.2),
+    0 4px 8px rgb(24 36 52 / 0.07),
+    0 18px 38px rgb(88 169 242 / 0.16);
+  transform: translateY(-2px) scale(1.01);
+}
+
+button:not(.play-button):not(.launch-ring-button):not(.corner-tile):active {
+  box-shadow:
+    inset 0 2px 5px rgb(24 36 52 / 0.16),
+    inset 0 -1px 0 rgb(255 255 255 / 0.16),
+    0 2px 5px rgb(24 36 52 / 0.05);
+  transform: translateY(1px) scale(0.975);
+}
+
+.folder-item,
+.version-sidebar-item,
+.download-version-button,
+.loader-option,
+.download-result-item,
+.settings-nav-item,
+.settings-toggle-row {
+  border-color: rgb(255 255 255 / 0.34);
+  background: var(--liquid-bg), var(--theme-item-bg);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.6),
+    0 2px 5px rgb(24 36 52 / 0.05),
+    0 10px 24px rgb(24 36 52 / 0.08);
+}
+
+.folder-item:hover,
+.folder-item.is-active,
+.version-sidebar-item:hover,
+.version-sidebar-item.is-active,
+.loader-option:hover,
+.loader-option.is-active,
+.download-result-item:hover,
+.settings-nav-item:hover,
+.settings-nav-item.is-active {
+  border-color: rgb(88 169 242 / 0.42);
+  background: var(--liquid-bg-hover), var(--glass-bg-blue);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.84),
+    0 3px 7px rgb(24 36 52 / 0.06),
+    0 16px 34px rgb(88 169 242 / 0.18);
+}
+
+.settings-java-path,
+.settings-default-version,
+.settings-memory,
+.download-search-input,
+.rename-input {
+  border-color: rgb(255 255 255 / 0.42);
+  background: var(--liquid-bg), var(--glass-bg-strong);
+  box-shadow:
+    inset 0 2px 5px rgb(24 36 52 / 0.08),
+    inset 0 -1px 0 rgb(255 255 255 / 0.5),
+    0 1px 2px rgb(24 36 52 / 0.04);
+}
+
+.play-button {
+  background:
+    radial-gradient(circle at 32% 24%, rgb(255 255 255 / 0.16), transparent 36%),
+    linear-gradient(145deg, #24292f, #0d0f12 72%);
+  box-shadow:
+    inset 0 2px 2px rgb(255 255 255 / 0.14),
+    inset 0 -3px 8px rgb(0 0 0 / 0.38),
+    0 3px 6px rgb(20 22 26 / 0.2),
+    0 18px 44px rgb(20 22 26 / 0.3);
+}
+
+.play-button::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.play-button:hover {
+  transform: translateY(-2px) scale(1.025);
+  box-shadow:
+    inset 0 2px 2px rgb(255 255 255 / 0.18),
+    0 0 0 7px rgb(88 169 242 / 0.13),
+    0 24px 58px rgb(20 22 26 / 0.34);
+}
+
+.play-button:active {
+  transform: translateY(1px) scale(0.94);
+  box-shadow:
+    inset 0 4px 9px rgb(0 0 0 / 0.45),
+    0 8px 20px rgb(20 22 26 / 0.22);
+}
+
+.corner-tile {
+  background:
+    radial-gradient(circle at 32% 22%, rgb(255 255 255 / 0.14), transparent 38%),
+    linear-gradient(145deg, #24292f, #0d0f12 74%);
+  box-shadow:
+    inset 0 2px 2px rgb(255 255 255 / 0.12),
+    inset 0 -3px 8px rgb(0 0 0 / 0.38),
+    0 4px 8px rgb(20 22 26 / 0.18),
+    0 20px 48px rgb(20 22 26 / 0.3);
+}
+
+.avatar-wrap {
+  box-shadow:
+    inset 0 2px 3px rgb(255 255 255 / 0.38),
+    inset 0 -3px 8px rgb(24 36 52 / 0.12),
+    0 0 0 1px rgb(255 255 255 / 0.55),
+    0 0 30px rgb(88 169 242 / 0.4),
+    0 22px 54px rgb(24 36 52 / 0.18);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-surface,
+  .download-category-sidebar,
+  .download-content,
+  .settings-sidebar,
+  .settings-panel,
+  .folder-sidebar,
+  .version-sidebar,
+  .account-menu,
+  .corner-panel,
+  .launch-log-panel,
+  .launch-status,
+  button:not(.play-button):not(.launch-ring-button):not(.corner-tile) {
+    background: rgb(255 255 255 / 0.97);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  [data-theme="dark"] .glass-surface,
+  [data-theme="dark"] .download-category-sidebar,
+  [data-theme="dark"] .download-content,
+  [data-theme="dark"] .settings-sidebar,
+  [data-theme="dark"] .settings-panel,
+  [data-theme="dark"] .folder-sidebar,
+  [data-theme="dark"] .version-sidebar,
+  [data-theme="dark"] .account-menu,
+  [data-theme="dark"] .corner-panel,
+  [data-theme="dark"] .launch-log-panel,
+  [data-theme="dark"] .launch-status,
+  [data-theme="dark"] button:not(.play-button):not(.launch-ring-button):not(.corner-tile) {
+    background: rgb(20 24 30 / 0.97);
+  }
 }
 
 @media (max-width: 640px) {
