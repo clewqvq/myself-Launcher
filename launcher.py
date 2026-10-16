@@ -562,6 +562,11 @@ class Api:
         self._manifest_cache = None
         self._manifest_cache_time = 0
         self._translation_cache = {}
+        self._translation_misses = set()
+        self._translation_path = (
+            self.config_path.parent / "translations.json"
+        )
+        self._translation_loaded = False
         self._content_search_cache = {}
         self._java_version_cache = {}
         self._java_choice_cache = {}
@@ -2889,10 +2894,11 @@ class Api:
             if value and value.strip()
         ]
 
+        self._load_translation_cache()
+
         for key in keys:
-            cached = self._translation_cache.get(key)
-            if cached:
-                return cached
+            if key in self._translation_cache:
+                return self._translation_cache[key]
 
         queries = []
 
@@ -2902,35 +2908,105 @@ class Api:
                 queries.append(text)
 
         for query in queries:
-            for attempt in range(2):
-                try:
-                    url = (
-                        "https://www.mcmod.cn/s?key="
-                        + urllib.parse.quote(query)
-                    )
-                    html = _fetch_text_urls((url,), timeout=10)
-                except Exception:
-                    html = ""
+            names = self._mcmod_fetch_names(query)
 
-                names = self._mcmod_candidates(html) if html else []
+            if not names:
+                continue
 
-                if names:
-                    translation = self._mcmod_chinese_name(
-                        names,
-                        title or query,
-                        slug or query,
-                    )
-                    if translation:
-                        for key in keys:
-                            self._translation_cache[key] = translation
-                        return translation
-                    # 页面正常但没有中文名，不再重试
-                    break
+            translation = self._mcmod_chinese_name(
+                names,
+                title or query,
+                slug or query,
+            )
 
-                if attempt == 0:
-                    time.sleep(0.4)
+            if translation:
+                for key in keys:
+                    self._translation_cache[key] = translation
+                self._save_translation_cache()
+                return translation
+
+            # 页面正常但没有中文名，换关键词也不会改变结果
+            break
+
+        # ponytail: 空结果也落盘缓存，避免每次开启动器都重新请求；
+        # 译名后续新增时删掉 translations.json 即可刷新
+        for key in keys:
+            self._translation_cache.setdefault(key, "")
+            self._translation_misses.add(key)
+        self._save_translation_cache()
 
         return ""
+
+    def _load_translation_cache(self):
+        if self._translation_loaded:
+            return
+
+        self._translation_loaded = True
+
+        try:
+            data = json.loads(
+                self._translation_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        for key, value in (data.get("names") or {}).items():
+            if isinstance(value, str) and value:
+                self._translation_cache.setdefault(key, value)
+
+        for key in data.get("missing") or []:
+            if isinstance(key, str) and key:
+                self._translation_cache.setdefault(key, "")
+                self._translation_misses.add(key)
+
+    def _save_translation_cache(self):
+        try:
+            self._translation_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            self._translation_path.write_text(
+                json.dumps(
+                    {
+                        "names": {
+                            key: value
+                            for key, value in self._translation_cache.items()
+                            if value
+                        },
+                        "missing": sorted(self._translation_misses),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _mcmod_fetch_names(query):
+        for attempt in range(2):
+            try:
+                url = (
+                    "https://www.mcmod.cn/s?key="
+                    + urllib.parse.quote(str(query))
+                )
+                html = _fetch_text_urls((url,), timeout=10)
+            except Exception:
+                html = ""
+
+            names = Api._mcmod_candidates(html) if html else []
+
+            if names:
+                return names
+
+            if attempt == 0:
+                time.sleep(0.3)
+
+        return []
 
     @staticmethod
     def _mcmod_candidates(html):
