@@ -1563,6 +1563,10 @@ class Api:
         return {
             "source_folder": str(selected),
             "version_id": version_id,
+            "game_version": self._minecraft_version(
+                version_data,
+                version_id,
+            ),
             "version_folder": str(version_folder),
             "version_json": str(version_json_path),
             "version_jar": str(version_jar_path),
@@ -1689,6 +1693,7 @@ class Api:
         )
 
         versions = []
+        selected_game_version = ""
 
         for (
             version_folder,
@@ -1700,17 +1705,28 @@ class Api:
                 version_data.get("id")
                 or version_json_path.stem
             )
+            game_version = self._minecraft_version(
+                version_data,
+                version_id,
+            )
+            if version_id == selected_version_id:
+                selected_game_version = game_version
             versions.append(
                 {
                     "version_id": version_id,
+                    "game_version": game_version,
                     "version_folder": str(version_folder),
                     "display_name": names.get(version_id, version_id),
                 }
             )
 
+        if not selected_game_version and versions:
+            selected_game_version = versions[0]["game_version"]
+
         return {
             "ok": True,
             "selected_version_id": selected_version_id or "",
+            "game_version": selected_game_version,
             "versions": versions,
         }
 
@@ -2858,7 +2874,9 @@ class Api:
 
         return {
             "info": info,
-            "game_version": version_id,
+            "game_version": (
+                info.get("game_version") or version_id
+            ),
             "loader": loader,
             "game_root": Path(info["game_root"]),
             "version_folder": Path(info["version_folder"]),
@@ -2917,6 +2935,16 @@ class Api:
                 continue
 
         return str(title or slug or "未译名")
+
+    @staticmethod
+    def _minecraft_version(version_data, version_id):
+        for key in ("clientVersion", "inheritsFrom"):
+            value = str(version_data.get(key) or "").strip()
+            if value:
+                return value
+
+        match = re.search(r"\d+\.\d+(?:\.\d+)?", str(version_id or ""))
+        return match.group(0) if match else str(version_id or "")
 
     @staticmethod
     def _safe_content_name(value):

@@ -150,6 +150,7 @@ let importedFolders = [];
 let selectedSourceFolder = "";
 let importedVersions = [];
 let selectedVersionId = "";
+let selectedGameVersion = "";
 let folderSelectPending = false;
 let versionSelectPending = false;
 let nativeBootstrapped = false;
@@ -807,13 +808,26 @@ function renderDownloadVersionOptions() {
   downloadVersionOptions.replaceChildren(fragment);
 
   if (!contentGameVersion) {
-    contentGameVersion =
-      selectedVersionId || currentVersion || ids[0] || "";
+    contentGameVersion = defaultContentGameVersion(ids[0] || "");
   }
 
   if (!downloadVersionInput.value) {
     downloadVersionInput.value = contentGameVersion;
   }
+}
+
+function mcVersionFromText(value) {
+  const match = String(value || "").match(/\d+\.\d+(?:\.\d+)?/);
+  return match ? match[0] : "";
+}
+
+function defaultContentGameVersion(fallback = "") {
+  return (
+    selectedGameVersion ||
+    mcVersionFromText(selectedVersionId) ||
+    mcVersionFromText(currentVersion) ||
+    fallback
+  );
 }
 
 function readContentGameVersion() {
@@ -822,7 +836,7 @@ function readContentGameVersion() {
   if (value) {
     contentGameVersion = value;
   } else if (!contentGameVersion) {
-    contentGameVersion = selectedVersionId || currentVersion;
+    contentGameVersion = defaultContentGameVersion();
     downloadVersionInput.value = contentGameVersion;
   }
 
@@ -834,7 +848,7 @@ function syncContentVersionFromSelection() {
     return;
   }
 
-  contentGameVersion = selectedVersionId || currentVersion || "";
+  contentGameVersion = defaultContentGameVersion();
   downloadVersionInput.value = contentGameVersion;
 }
 
@@ -1557,6 +1571,7 @@ async function refreshVersionState() {
   if (!window.pywebview?.api?.get_versions || !selectedSourceFolder) {
     importedVersions = [];
     selectedVersionId = "";
+    selectedGameVersion = "";
     syncContentVersionFromSelection();
     renderVersionSidebar();
     return;
@@ -1571,6 +1586,7 @@ async function refreshVersionState() {
       ? result.versions
       : [];
     selectedVersionId = result.selected_version_id || "";
+    selectedGameVersion = result.game_version || "";
     syncContentVersionFromSelection();
     renderVersionSidebar();
   } catch {
