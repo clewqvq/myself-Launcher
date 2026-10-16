@@ -37,6 +37,12 @@ const downloadBrowserPanel = document.querySelector(
 const downloadSearchInput = document.querySelector(
   ".download-search-input"
 );
+const downloadVersionInput = document.querySelector(
+  ".download-version-input"
+);
+const downloadVersionOptions = document.querySelector(
+  ".download-version-options"
+);
 const downloadSearchButton = document.querySelector(
   ".download-search-button"
 );
@@ -166,6 +172,9 @@ let currentJavaStatus = null;
 let contentSearchPage = 1;
 let contentSearchHasMore = false;
 let contentSearchPending = false;
+let contentGameVersion = "";
+let contentVersionManual = false;
+const contentTranslations = new Map();
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -679,6 +688,7 @@ async function loadDownloadCatalog() {
     downloadCatalog = Array.isArray(result.groups)
       ? result.groups
       : [];
+    renderDownloadVersionOptions();
     renderDownloadCatalog();
   } catch (error) {
     downloadLoading.textContent =
@@ -702,6 +712,132 @@ function formatDownloadCount(value) {
   return String(count);
 }
 
+function contentDisplayTitle(item) {
+  const translation = contentTranslations.get(
+    `${item.source}:${item.project_id}`
+  );
+  return translation ? `[${translation}] ${item.title}` : item.title;
+}
+
+function applyContentTranslations(translations) {
+  let changed = false;
+
+  Object.entries(translations || {}).forEach(([key, value]) => {
+    if (!value || contentTranslations.get(key) === value) {
+      return;
+    }
+
+    contentTranslations.set(key, value);
+    changed = true;
+  });
+
+  if (!changed) {
+    return;
+  }
+
+  downloadResultList
+    .querySelectorAll(".download-result-item")
+    .forEach((button) => {
+      const translation = contentTranslations.get(
+        button.dataset.resultKey
+      );
+
+      if (!translation) {
+        return;
+      }
+
+      const title = button.querySelector(".download-result-title");
+
+      if (title) {
+        title.textContent = `[${translation}] ${button.dataset.title}`;
+      }
+    });
+}
+
+async function updateContentTranslations(items) {
+  if (
+    !window.pywebview?.api?.get_content_translations ||
+    !items.length
+  ) {
+    return;
+  }
+
+  try {
+    const result =
+      await window.pywebview.api.get_content_translations(
+        items.map((item) => ({
+          source: item.source,
+          project_id: item.project_id,
+          title: item.title,
+          slug: item.slug || "",
+        }))
+      );
+
+    if (result?.ok) {
+      applyContentTranslations(result.translations || {});
+    }
+  } catch {
+    // 译名获取失败时保留英文原名。
+  }
+}
+
+function renderDownloadVersionOptions() {
+  if (!downloadVersionOptions) {
+    return;
+  }
+
+  const ids = [];
+
+  downloadCatalog.forEach((group) => {
+    (group.versions || []).forEach((version) => {
+      if (version.id) {
+        ids.push(version.id);
+      }
+    });
+  });
+
+  const fragment = document.createDocumentFragment();
+
+  ids.forEach((id) => {
+    const option = document.createElement("option");
+    option.value = id;
+    fragment.appendChild(option);
+  });
+
+  downloadVersionOptions.replaceChildren(fragment);
+
+  if (!contentGameVersion) {
+    contentGameVersion =
+      selectedVersionId || currentVersion || ids[0] || "";
+  }
+
+  if (!downloadVersionInput.value) {
+    downloadVersionInput.value = contentGameVersion;
+  }
+}
+
+function readContentGameVersion() {
+  const value = downloadVersionInput.value.trim();
+
+  if (value) {
+    contentGameVersion = value;
+  } else if (!contentGameVersion) {
+    contentGameVersion = selectedVersionId || currentVersion;
+    downloadVersionInput.value = contentGameVersion;
+  }
+
+  return contentGameVersion;
+}
+
+function syncContentVersionFromSelection() {
+  if (contentVersionManual || !downloadVersionInput) {
+    return;
+  }
+
+  contentGameVersion = selectedVersionId || currentVersion || "";
+  downloadVersionInput.value = contentGameVersion;
+}
+
 function renderContentResults(items) {
   downloadResultList.replaceChildren();
 
@@ -716,11 +852,13 @@ function renderContentResults(items) {
   const fragment = document.createDocumentFragment();
 
   for (const item of items) {
+    const resultKey = `${item.source}:${item.project_id}`;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "download-result-item";
     button.dataset.source = item.source;
     button.dataset.projectId = item.project_id;
+    button.dataset.resultKey = resultKey;
     button.dataset.title = item.title;
     button.dataset.slug = item.slug || "";
 
@@ -734,7 +872,7 @@ function renderContentResults(items) {
     copy.className = "download-result-copy";
     const title = document.createElement("strong");
     title.className = "download-result-title";
-    title.textContent = item.title;
+    title.textContent = contentDisplayTitle(item);
     const description = document.createElement("span");
     description.className = "download-result-description";
     description.textContent = item.description || "";
@@ -795,7 +933,7 @@ async function loadContentSearch(page = 1) {
     const result = await window.pywebview.api.search_content(
       selectedDownloadCategory,
       downloadSearchInput.value.trim(),
-      selectedVersionId || currentVersion,
+      readContentGameVersion(),
       "",
       contentSearchPage
     );
@@ -804,8 +942,10 @@ async function loadContentSearch(page = 1) {
       throw new Error(result.message || "读取内容列表失败");
     }
 
+    const items = result.items || [];
     contentSearchHasMore = Boolean(result.has_more);
-    renderContentResults(result.items || []);
+    renderContentResults(items);
+    updateContentTranslations(items);
   } catch (error) {
     downloadResultList.replaceChildren();
     const message = document.createElement("div");
@@ -851,7 +991,8 @@ async function handleContentDownload(item) {
         item.source,
         item.project_id,
         item.title,
-        item.slug || ""
+        item.slug || "",
+        readContentGameVersion()
       );
 
     if (!result.ok) {
@@ -897,6 +1038,7 @@ function selectDownloadCategory(category) {
   ) {
     downloadSearchInput.value = "";
     contentSearchPage = 1;
+    readContentGameVersion();
     showDownloadPanel(downloadBrowserPanel);
     loadContentSearch(1);
     return;
@@ -1415,6 +1557,7 @@ async function refreshVersionState() {
   if (!window.pywebview?.api?.get_versions || !selectedSourceFolder) {
     importedVersions = [];
     selectedVersionId = "";
+    syncContentVersionFromSelection();
     renderVersionSidebar();
     return;
   }
@@ -1428,6 +1571,7 @@ async function refreshVersionState() {
       ? result.versions
       : [];
     selectedVersionId = result.selected_version_id || "";
+    syncContentVersionFromSelection();
     renderVersionSidebar();
   } catch {
     // Keep the current version list when the native bridge is unavailable.
@@ -1698,6 +1842,21 @@ downloadSearchButton.addEventListener("click", () => {
 
 downloadSearchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
+    loadContentSearch(1);
+  }
+});
+
+downloadVersionInput.addEventListener("change", () => {
+  contentGameVersion = downloadVersionInput.value.trim();
+  contentVersionManual = true;
+  loadContentSearch(1);
+});
+
+downloadVersionInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    contentGameVersion = downloadVersionInput.value.trim();
+    contentVersionManual = true;
     loadContentSearch(1);
   }
 });

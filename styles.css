@@ -477,6 +477,25 @@ body {
   outline: none;
 }
 
+.download-version-input {
+  width: 170px;
+  flex: 0 0 170px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  background: var(--liquid-bg), var(--glass-bg-strong);
+  color: var(--launcher-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  outline: none;
+}
+
+.download-version-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
 .download-search-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
@@ -1974,6 +1993,19 @@ button:not(.play-button):not(.launch-ring-button):not(.corner-tile):active {
   .download-result-item {
     grid-template-columns: 46px minmax(0, 1fr);
     gap: 10px;
+  }
+
+  .download-search-row {
+    flex-wrap: wrap;
+  }
+
+  .download-version-input {
+    width: 100%;
+    flex-basis: 100%;
+  }
+
+  .download-search-input {
+    flex: 1 1 120px;
   }
 
   .download-result-icon {

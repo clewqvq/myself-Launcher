@@ -200,11 +200,11 @@ def _hidden_process_kwargs():
     return {}
 
 
-def _fetch_json_urls(urls, timeout=12):
+def _fetch_json_urls(urls, timeout=12, attempts=2):
     last_error = None
 
     for url in urls:
-        for attempt in range(2):
+        for attempt in range(max(1, attempts)):
             try:
                 request = urllib.request.Request(
                     url,
@@ -222,7 +222,7 @@ def _fetch_json_urls(urls, timeout=12):
                     return json.loads(raw)
             except Exception as exc:
                 last_error = exc
-                if attempt == 0:
+                if attempt + 1 < attempts:
                     time.sleep(0.8)
 
     raise RuntimeError(f"无法读取下载信息：{last_error}")
@@ -562,6 +562,7 @@ class Api:
         self._manifest_cache = None
         self._manifest_cache_time = 0
         self._translation_cache = {}
+        self._content_search_cache = {}
         self._java_version_cache = {}
         self._java_choice_cache = {}
         self._java_candidates_cache = None
@@ -2950,7 +2951,9 @@ class Api:
             }
         )
         data = _fetch_json_urls(
-            (f"{MCIM_BASE}/modrinth/v2/search?{params}",)
+            (f"{MCIM_BASE}/modrinth/v2/search?{params}",),
+            timeout=8,
+            attempts=1,
         )
         results = []
         exact_slug = str(query or "").strip().lower()
@@ -3053,7 +3056,7 @@ class Api:
             f"{MCIM_BASE}/curseforge/v1/mods/search?"
             + urllib.parse.urlencode(params)
         )
-        data = _fetch_json_urls((url,))
+        data = _fetch_json_urls((url,), timeout=6, attempts=1)
         results = []
 
         for item in data.get("data", []):
@@ -3103,45 +3106,70 @@ class Api:
                 "message": "该分类暂不支持在线搜索",
             }
 
+        page = max(int(page or 1), 1)
+        cache_key = (
+            category,
+            str(query or "").strip().lower(),
+            str(game_version or ""),
+            str(loader or ""),
+            page,
+        )
+        cached = self._content_search_cache.get(cache_key)
+        if cached and time.time() - cached[0] < 300:
+            return cached[1]
+
         if not loader:
             try:
                 loader = self._content_context().get("loader", "")
             except Exception:
                 loader = ""
 
-        page = max(int(page or 1), 1)
         page_size = 20
         fetch_count = min(page * page_size, 200)
         results = []
         totals = []
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [
-                executor.submit(
-                    self._search_modrinth,
-                    category,
-                    query,
-                    game_version,
-                    loader,
-                    fetch_count,
-                ),
-                executor.submit(
-                    self._search_curseforge,
-                    category,
-                    query,
-                    game_version,
-                    loader,
-                    fetch_count,
-                ),
-            ]
+        executor = ThreadPoolExecutor(max_workers=2)
+        futures = [
+            executor.submit(
+                self._search_modrinth,
+                category,
+                query,
+                game_version,
+                loader,
+                fetch_count,
+            ),
+            executor.submit(
+                self._search_curseforge,
+                category,
+                query,
+                game_version,
+                loader,
+                fetch_count,
+            ),
+        ]
+        succeeded = 0
 
-            for future in futures:
+        try:
+            # 慢源不让用户干等：拿到快源结果就返回，慢源下次命中缓存
+            for future in as_completed(futures, timeout=4):
                 try:
                     items, total = future.result()
-                    results.extend(items)
-                    totals.append(total)
                 except Exception:
                     continue
+                succeeded += 1
+                results.extend(items)
+                totals.append(total)
+        except TimeoutError:
+            pass
+        finally:
+            executor.shutdown(wait=False)
+
+        if not succeeded and not results:
+            return {
+                "ok": False,
+                "message": "内容源连接超时，请稍后重试",
+            }
 
         deduped = {}
         for item in results:
@@ -3161,13 +3189,59 @@ class Api:
         items = ordered[start:start + page_size]
         total = max(totals or [len(ordered)])
 
-        return {
+        response = {
             "ok": True,
             "page": page,
             "page_size": page_size,
             "total": total,
             "has_more": page * page_size < total,
             "items": items,
+        }
+        self._content_search_cache[cache_key] = (
+            time.time(),
+            response,
+        )
+        return response
+
+    def get_content_translations(self, items):
+        if not isinstance(items, list):
+            return {"ok": True, "translations": {}}
+
+        unique = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = f"{item.get('source', '')}:{item.get('project_id', '')}"
+            title = item.get("title") or ""
+            slug = item.get("slug") or ""
+            if key and title:
+                unique[key] = (title, slug)
+
+        translations = {}
+
+        def translate(entry):
+            key, (title, slug) = entry
+            translation = self._mcmod_translation(title, slug)
+            if not translation or translation.lower() == title.lower():
+                return key, ""
+            return key, translation
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(translate, entry)
+                for entry in unique.items()
+            ]
+            for future in as_completed(futures):
+                try:
+                    key, translated = future.result()
+                    if translated:
+                        translations[key] = translated
+                except Exception:
+                    continue
+
+        return {
+            "ok": True,
+            "translations": translations,
         }
 
     def _content_file_modrinth(
@@ -3290,6 +3364,7 @@ class Api:
         project_id,
         title,
         slug,
+        game_version="",
     ):
         current = self.download_state.snapshot()
         if current["running"]:
@@ -3303,6 +3378,7 @@ class Api:
                 str(project_id),
                 title,
                 slug,
+                game_version,
             ),
             daemon=True,
         )
@@ -3316,12 +3392,16 @@ class Api:
         project_id,
         title,
         slug,
+        game_version="",
     ):
         self.download_state.begin(f"正在获取 {title}")
 
         try:
             context = self._content_context()
-            game_version = context["game_version"]
+            game_version = (
+                str(game_version or "").strip()
+                or context["game_version"]
+            )
             loader = context["loader"]
 
             if source == "modrinth":
