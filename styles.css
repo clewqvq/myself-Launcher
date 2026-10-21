@@ -235,30 +235,12 @@ body {
   border-radius: 14px;
 }
 
-.download-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 12px;
-}
-
 .download-title {
   margin: 0;
   color: var(--launcher-ink);
   font-size: 24px;
   font-weight: 700;
   line-height: 1.2;
-}
-
-.download-mirror-badge {
-  padding: 5px 9px;
-  border: 1px solid rgb(88 169 242 / 0.28);
-  border-radius: 999px;
-  background: var(--glass-bg-blue);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
 }
 
 .download-panel-stack {
@@ -515,6 +497,7 @@ body {
 }
 
 .download-pagination button {
+  min-width: 34px;
   padding: 7px 12px;
   border-radius: 12px;
   font-size: 13px;
@@ -1967,19 +1950,8 @@ button:not(.play-button):not(.launch-ring-button):not(.corner-tile):active {
     border-radius: 20px;
   }
 
-  .download-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
-  }
-
   .download-title {
     font-size: 20px;
-  }
-
-  .download-mirror-badge {
-    padding: 4px 7px;
-    font-size: 10px;
   }
 
   .download-version-list {

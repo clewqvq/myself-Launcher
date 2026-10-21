@@ -501,7 +501,7 @@ async function saveSettings() {
 
 async function handleBrowseJava() {
   if (!window.pywebview?.api?.browse_java) {
-    settingsStatus.textContent = "请在打包后的 exe 中选择 Java";
+    settingsStatus.textContent = "仅 exe 支持选择";
     return;
   }
 
@@ -521,7 +521,7 @@ async function handleBrowseJava() {
 
 async function handleChangeWallpaper() {
   if (!window.pywebview?.api?.browse_wallpaper) {
-    settingsStatus.textContent = "请在打包后的 exe 中更换壁纸";
+    settingsStatus.textContent = "仅 exe 支持更换";
     return;
   }
 
@@ -537,7 +537,7 @@ async function handleChangeWallpaper() {
         `url("${selectedWallpaperUri}")`;
       settingsWallpaperPath.value =
         result.wallpaper_name || "已设置壁纸";
-      settingsStatus.textContent = "壁纸已选择，保存后生效";
+      settingsStatus.textContent = "保存后生效";
     } else {
       settingsStatus.textContent = result.message || "未选择图片";
     }
@@ -644,7 +644,7 @@ function renderDownloadCatalog() {
     label.textContent = group.label;
     const count = document.createElement("span");
     count.className = "version-category-count";
-    count.textContent = `${group.versions.length} 个版本`;
+    count.textContent = String(group.versions.length);
     summary.append(label, count);
 
     const list = document.createElement("div");
@@ -669,13 +669,13 @@ function renderDownloadCatalog() {
 
 async function loadDownloadCatalog() {
   if (!window.pywebview?.api?.get_minecraft_versions) {
-    downloadLoading.textContent = "请在打包后的 exe 中下载版本";
+    downloadLoading.textContent = "仅 exe 支持下载";
     downloadLoading.classList.remove("is-hidden");
     versionCategoryList.replaceChildren();
     return;
   }
 
-  downloadLoading.textContent = "正在读取版本列表...";
+  downloadLoading.textContent = "正在加载";
   downloadLoading.classList.remove("is-hidden");
 
   try {
@@ -858,7 +858,7 @@ function renderContentResults(items) {
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "download-browser-status";
-    empty.textContent = "没有找到兼容内容";
+    empty.textContent = "无结果";
     downloadResultList.appendChild(empty);
     return;
   }
@@ -899,7 +899,8 @@ function renderContentResults(items) {
     source.textContent = item.source_label;
     const downloads = document.createElement("span");
     downloads.className = "download-result-downloads";
-    downloads.textContent = `下载 ${formatDownloadCount(item.downloads)}`;
+    downloads.title = "下载量";
+    downloads.textContent = formatDownloadCount(item.downloads);
     meta.append(source, downloads);
 
     button.append(icon, copy, meta);
@@ -940,7 +941,7 @@ async function loadContentSearch(page = 1) {
   downloadResultList.replaceChildren();
   const status = document.createElement("div");
   status.className = "download-browser-status";
-  status.textContent = "正在读取内容列表...";
+  status.textContent = "正在加载";
   downloadResultList.appendChild(status);
 
   try {
@@ -989,11 +990,11 @@ async function handleContentDownload(item) {
   showDownloadPanel(downloadProgressPanel);
   updateDownloadProgress({
     progress: 1,
-    message: `正在准备下载 ${item.title}`,
+    message: `准备下载 ${item.title}`,
   });
   syncDownloadRing({
     progress: 1,
-    message: `正在准备下载 ${item.title}`,
+    message: `准备下载 ${item.title}`,
     error: "",
     running: true,
   });
@@ -1090,7 +1091,7 @@ async function openLoaderSelection(versionId) {
 
   const loading = document.createElement("div");
   loading.className = "download-loading";
-  loading.textContent = "正在读取加载器...";
+  loading.textContent = "正在加载";
   loaderOptionList.appendChild(loading);
 
   try {
@@ -1255,8 +1256,7 @@ async function startSelectedDownload() {
   }
 
   if (!window.pywebview?.api?.start_version_download) {
-    downloadProgressMessage.textContent =
-      "请在打包后的 exe 中下载版本";
+    downloadProgressMessage.textContent = "仅 exe 支持下载";
     return;
   }
 
@@ -1317,13 +1317,13 @@ function updateVerifyButton() {
 
 async function handlePremiumLogin() {
   if (!window.pywebview?.api?.start_premium_login) {
-    setLaunchStatus("请在打包后的 exe 中验证正版", true);
+    setLaunchStatus("仅 exe 支持验证", true);
     return;
   }
 
   premiumLoginPending = true;
   updateVerifyButton();
-  setLaunchStatus("正在打开微软授权页面");
+  setLaunchStatus("正在打开授权页");
 
   try {
     const result = await window.pywebview.api.start_premium_login();
@@ -1338,7 +1338,7 @@ async function handlePremiumLogin() {
       return;
     }
 
-    setLaunchStatus(result.message || "请在浏览器中完成微软授权");
+    setLaunchStatus(result.message || "请在浏览器完成授权");
     startPremiumStatusPolling();
   } catch (error) {
     premiumLoginPending = false;
@@ -1349,7 +1349,7 @@ async function handlePremiumLogin() {
 
 async function handleLogoutAccount() {
   if (!window.pywebview?.api?.logout_account) {
-    setLaunchStatus("请在打包后的 exe 中退出账号", true);
+    setLaunchStatus("仅 exe 支持退出", true);
     return;
   }
 
@@ -1639,7 +1639,7 @@ async function handleVersionSelect(versionId) {
     renameInput.blur();
   }
 
-  setLaunchStatus("正在检测游戏版本");
+  setLaunchStatus("检测版本");
 
   try {
     const result = await window.pywebview.api.select_version(
@@ -1691,7 +1691,7 @@ async function handleFolderSelect(sourceFolder) {
     renameInput.blur();
   }
 
-  setLaunchStatus("正在检测游戏文件");
+  setLaunchStatus("检测文件");
 
   try {
     const result = await window.pywebview.api.select_folder(sourceFolder);
@@ -2056,11 +2056,11 @@ function updateLaunchRing(progress) {
 
 async function handleImport() {
   if (!window.pywebview?.api?.import_folder) {
-    setLaunchStatus("请在打包后的 exe 中导入文件夹", true);
+    setLaunchStatus("仅 exe 支持导入", true);
     return;
   }
 
-  setLaunchStatus("正在导入文件夹");
+  setLaunchStatus("正在导入");
 
   try {
     const result = await window.pywebview.api.import_folder();
@@ -2087,7 +2087,7 @@ async function handleImport() {
 
 async function handleLaunch() {
   if (!window.pywebview?.api?.launch_game) {
-    setLaunchStatus("请在打包后的 exe 中启动游戏", true);
+    setLaunchStatus("仅 exe 支持启动", true);
     return;
   }
 
@@ -2112,11 +2112,11 @@ async function handleLaunch() {
 async function handlePlayButton() {
   if (isGameRunning) {
     if (!window.pywebview?.api?.stop_game) {
-      setLaunchStatus("请在打包后的 exe 中关闭游戏", true);
+      setLaunchStatus("仅 exe 支持关闭", true);
       return;
     }
 
-    setLaunchStatus("正在关闭游戏");
+    setLaunchStatus("正在关闭");
 
     try {
       const result = await window.pywebview.api.stop_game();

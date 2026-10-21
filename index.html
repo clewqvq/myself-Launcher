@@ -243,15 +243,12 @@
                 />
               </svg>
             </button>
-            <div class="download-heading">
-              <h2 class="download-title">原版</h2>
-              <span class="download-mirror-badge">BMCLAPI 国内镜像</span>
-            </div>
+            <h2 class="download-title">原版</h2>
           </div>
 
           <div class="download-panel-stack">
             <div class="download-catalog-panel">
-              <div class="download-loading">正在读取版本列表...</div>
+              <div class="download-loading">正在加载</div>
               <div class="version-category-list"></div>
             </div>
 
@@ -269,7 +266,7 @@
                   class="download-version-input"
                   type="text"
                   list="download-version-options"
-                  placeholder="Minecraft 版本"
+                  placeholder="游戏版本"
                   spellcheck="false"
                 >
                 <datalist
@@ -293,12 +290,14 @@
                 <button
                   class="download-page-prev"
                   type="button"
-                >上一页</button>
+                  aria-label="上一页"
+                >‹</button>
                 <span class="download-page-label">第 1 页</span>
                 <button
                   class="download-page-next"
                   type="button"
-                >下一页</button>
+                  aria-label="下一页"
+                >›</button>
               </div>
               <div class="download-result-list"></div>
               <div
@@ -307,12 +306,14 @@
                 <button
                   class="download-page-prev"
                   type="button"
-                >上一页</button>
+                  aria-label="上一页"
+                >‹</button>
                 <span class="download-page-label">第 1 页</span>
                 <button
                   class="download-page-next"
                   type="button"
-                >下一页</button>
+                  aria-label="下一页"
+                >›</button>
               </div>
             </div>
 
@@ -359,14 +360,14 @@
               <div class="settings-panel glass-surface settings-general-panel">
                 <div class="settings-row">
                   <label class="settings-label" for="settings-java">
-                    Java 路径
+                    Java
                   </label>
                   <div class="settings-field">
                     <input
                       id="settings-java"
                       class="settings-java-path"
                       type="text"
-                      placeholder="自动检测"
+                      placeholder="自动"
                       spellcheck="false"
                     >
                     <button
@@ -383,7 +384,7 @@
 
                 <div class="settings-row">
                   <label class="settings-label" for="settings-memory">
-                    启动内存
+                    内存
                   </label>
                   <div class="settings-field">
                     <input
@@ -414,7 +415,7 @@
                 </div>
 
                 <label class="settings-toggle-row">
-                  <span>启动游戏后最小化启动器</span>
+                  <span>启动后最小化</span>
                   <input
                     class="settings-minimize"
                     type="checkbox"
@@ -422,7 +423,7 @@
                 </label>
 
                 <label class="settings-toggle-row">
-                  <span>启动时自动选择上次文件夹</span>
+                  <span>记住上次文件夹</span>
                   <input
                     class="settings-auto-folder"
                     type="checkbox"
@@ -452,13 +453,13 @@
                     <input
                       class="settings-wallpaper-path"
                       type="text"
-                      placeholder="未设置壁纸"
+                      placeholder="无"
                       readonly
                     >
                     <button
                       class="settings-wallpaper-button"
                       type="button"
-                    >更换壁纸</button>
+                    >选择壁纸</button>
                   </div>
                 </div>
               </div>
@@ -467,7 +468,7 @@
                 <button
                   class="save-settings-button"
                   type="button"
-                >保存设置</button>
+                >保存</button>
                 <span class="settings-status" aria-live="polite"></span>
               </div>
             </div>
