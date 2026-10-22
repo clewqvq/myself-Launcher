@@ -192,6 +192,42 @@ def _network_context():
     return ssl.create_default_context(cafile=certifi.where())
 
 
+_SOURCE_HEALTH = {}
+_SOURCE_HEALTH_LOCK = threading.Lock()
+
+
+def _source_host(url):
+    try:
+        return urllib.parse.urlsplit(url).netloc.lower()
+    except Exception:
+        return ""
+
+
+def _rank_urls(urls):
+    unique = list(dict.fromkeys(url for url in urls if url))
+    now = time.time()
+
+    def score(url):
+        with _SOURCE_HEALTH_LOCK:
+            entry = _SOURCE_HEALTH.get(_source_host(url))
+        if not entry or now - entry[1] > 900:
+            return 0
+        return entry[0]
+
+    return sorted(unique, key=score, reverse=True)
+
+
+def _record_source(url, ok):
+    host = _source_host(url)
+    if not host:
+        return
+
+    with _SOURCE_HEALTH_LOCK:
+        score = _SOURCE_HEALTH.get(host, (0, 0))[0]
+        score = min(score + 2, 10) if ok else max(score - 3, -10)
+        _SOURCE_HEALTH[host] = (score, time.time())
+
+
 def _hidden_process_kwargs():
     if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
         return {
@@ -203,7 +239,7 @@ def _hidden_process_kwargs():
 def _fetch_json_urls(urls, timeout=12, attempts=2):
     last_error = None
 
-    for url in urls:
+    for url in _rank_urls(urls):
         for attempt in range(max(1, attempts)):
             try:
                 request = urllib.request.Request(
@@ -219,9 +255,11 @@ def _fetch_json_urls(urls, timeout=12, attempts=2):
                     context=_network_context(),
                 ) as response:
                     raw = response.read().decode("utf-8", errors="replace")
+                    _record_source(url, True)
                     return json.loads(raw)
             except Exception as exc:
                 last_error = exc
+                _record_source(url, False)
                 if attempt + 1 < attempts:
                     time.sleep(0.8)
 
@@ -231,7 +269,7 @@ def _fetch_json_urls(urls, timeout=12, attempts=2):
 def _fetch_text_urls(urls, timeout=12):
     last_error = None
 
-    for url in urls:
+    for url in _rank_urls(urls):
         for attempt in range(2):
             try:
                 request = urllib.request.Request(
@@ -243,12 +281,15 @@ def _fetch_text_urls(urls, timeout=12):
                     timeout=timeout,
                     context=_network_context(),
                 ) as response:
-                    return response.read().decode(
+                    text = response.read().decode(
                         "utf-8",
                         errors="replace",
                     )
+                    _record_source(url, True)
+                    return text
             except Exception as exc:
                 last_error = exc
+                _record_source(url, False)
                 if attempt == 0:
                     time.sleep(0.8)
 
@@ -268,54 +309,56 @@ def _download_urls(urls, target, sha1="", progress_callback=None):
             return str(target)
 
     last_error = None
+    candidates = _rank_urls(urls)
 
-    for url in urls:
-        if not url:
-            continue
+    # 单一来源失败时再试一次，多来源则直接切换更快
+    if len(candidates) == 1:
+        candidates = candidates * 2
 
-        for attempt in range(2):
-            part = target.with_suffix(target.suffix + ".part")
+    for index, url in enumerate(candidates):
+        part = target.with_suffix(
+            f"{target.suffix}.{index}.part"
+        )
 
-            try:
-                request = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "MinecraftLauncher/1.0"},
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "MinecraftLauncher/1.0"},
+            )
+            digest = hashlib.sha1()
+
+            with urllib.request.urlopen(
+                request,
+                timeout=12,
+                context=_network_context(),
+            ) as response, open(part, "wb") as output:
+                total_size = int(
+                    response.headers.get("Content-Length") or 0
                 )
-                digest = hashlib.sha1()
+                downloaded = 0
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback:
+                        progress_callback(downloaded, total_size)
 
-                with urllib.request.urlopen(
-                    request,
-                    timeout=60,
-                    context=_network_context(),
-                ) as response, open(part, "wb") as output:
-                    total_size = int(
-                        response.headers.get("Content-Length") or 0
-                    )
-                    downloaded = 0
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        if progress_callback:
-                            progress_callback(downloaded, total_size)
+            if sha1 and digest.hexdigest().lower() != sha1.lower():
+                raise RuntimeError("下载文件校验失败")
 
-                if sha1 and digest.hexdigest().lower() != sha1.lower():
-                    raise RuntimeError("下载文件校验失败")
-
-                os.replace(part, target)
-                return str(target)
-            except Exception as exc:
-                last_error = exc
-                try:
-                    part.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-                if attempt == 0:
-                    time.sleep(0.8)
+            os.replace(part, target)
+            _record_source(url, True)
+            return str(target)
+        except Exception as exc:
+            last_error = exc
+            _record_source(url, False)
+            try:
+                part.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     raise RuntimeError(f"下载失败：{target.name}（{last_error}）")
 
@@ -1776,10 +1819,66 @@ class Api:
         ):
             return self._manifest_cache
 
-        manifest = _fetch_json_urls(VERSION_MANIFEST_URLS)
+        cache_path = (
+            self.config_path.parent
+            / "cache"
+            / "version_manifest.json"
+        )
+
+        try:
+            manifest = _fetch_json_urls(
+                VERSION_MANIFEST_URLS,
+                timeout=8,
+                attempts=1,
+            )
+        except Exception:
+            manifest = self._read_version_manifest_cache(cache_path)
+            if not manifest:
+                raise
+            self._manifest_cache = manifest
+            self._manifest_cache_time = now
+            return manifest
+
         self._manifest_cache = manifest
         self._manifest_cache_time = now
+        self._write_version_manifest_cache(cache_path, manifest)
         return manifest
+
+    @staticmethod
+    def _read_version_manifest_cache(path):
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        if time.time() - float(data.get("saved_at") or 0) > 2592000:
+            return None
+
+        manifest = data.get("manifest")
+        return manifest if isinstance(manifest, dict) else None
+
+    @staticmethod
+    def _write_version_manifest_cache(path, manifest):
+        try:
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(
+                json.dumps(
+                    {
+                        "saved_at": time.time(),
+                        "manifest": manifest,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temp, path)
+        except Exception:
+            pass
 
     def get_minecraft_versions(self):
         manifest = self._version_manifest()
@@ -3097,8 +3196,11 @@ class Api:
             }
         )
         data = _fetch_json_urls(
-            (f"{MCIM_BASE}/modrinth/v2/search?{params}",),
-            timeout=8,
+            (
+                f"{MCIM_BASE}/modrinth/v2/search?{params}",
+                f"https://api.modrinth.com/v2/search?{params}",
+            ),
+            timeout=6,
             attempts=1,
         )
         results = []
@@ -3142,7 +3244,9 @@ class Api:
                             "https://api.modrinth.com/v2/project/"
                             f"{urllib.parse.quote(exact_slug)}"
                         ),
-                    )
+                    ),
+                    timeout=8,
+                    attempts=1,
                 )
                 if exact.get("project_type") == project_type:
                     results.append(
@@ -3298,7 +3402,7 @@ class Api:
 
         try:
             # 慢源不让用户干等：拿到快源结果就返回，慢源下次命中缓存
-            for future in as_completed(futures, timeout=4):
+            for future in as_completed(futures, timeout=6):
                 try:
                     items, total = future.result()
                 except Exception:
@@ -3395,11 +3499,15 @@ class Api:
         game_version,
         loader,
     ):
-        url = (
-            f"{MCIM_BASE}/modrinth/v2/project/"
-            f"{urllib.parse.quote(str(project_id))}/version"
+        project = urllib.parse.quote(str(project_id))
+        versions = _fetch_json_urls(
+            (
+                f"{MCIM_BASE}/modrinth/v2/project/{project}/version",
+                f"https://api.modrinth.com/v2/project/{project}/version",
+            ),
+            timeout=10,
+            attempts=1,
         )
-        versions = _fetch_json_urls((url,))
         compatible = []
 
         for version in versions:
