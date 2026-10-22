@@ -317,6 +317,42 @@
               </div>
             </div>
 
+            <div class="download-detail-panel" hidden>
+              <div class="download-detail-head">
+                <strong class="download-detail-title"></strong>
+                <span class="download-detail-target"></span>
+              </div>
+              <div class="download-detail-group">
+                <span class="download-detail-label">游戏版本</span>
+                <div
+                  class="download-detail-options detail-game-versions"
+                ></div>
+              </div>
+              <div class="download-detail-group">
+                <span class="download-detail-label">加载器</span>
+                <div
+                  class="download-detail-options detail-loaders"
+                ></div>
+              </div>
+              <div class="download-detail-group">
+                <span class="download-detail-label">模组版本</span>
+                <div
+                  class="download-detail-options detail-mod-versions"
+                ></div>
+              </div>
+              <div class="download-detail-actions">
+                <button
+                  class="download-detail-back"
+                  type="button"
+                >返回</button>
+                <button
+                  class="download-detail-download"
+                  type="button"
+                  disabled
+                >下载</button>
+              </div>
+            </div>
+
             <div class="download-placeholder-panel" hidden>
               <div class="download-placeholder-icon" aria-hidden="true"></div>
               <strong class="download-placeholder-title"></strong>
@@ -328,6 +364,29 @@
               </div>
               <strong class="download-progress-percent">0%</strong>
               <p class="download-progress-message"></p>
+              <button
+                class="download-cancel-button"
+                type="button"
+                aria-label="取消下载"
+                title="取消下载"
+                hidden
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M6 6l12 12M18 6L6 18"
+                    stroke="currentColor"
+                    stroke-width="2.4"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -483,6 +542,16 @@
           type="button"
           hidden
         >退出账号</button>
+      </div>
+
+      <div class="confirm-dialog" hidden>
+        <div class="confirm-card">
+          <p class="confirm-message"></p>
+          <div class="confirm-actions">
+            <button class="confirm-yes" type="button">是</button>
+            <button class="confirm-no" type="button">否</button>
+          </div>
+        </div>
       </div>
     </main>
     <script src="script.js"></script>

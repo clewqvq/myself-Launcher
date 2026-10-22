@@ -194,6 +194,11 @@ def _network_context():
 
 _SOURCE_HEALTH = {}
 _SOURCE_HEALTH_LOCK = threading.Lock()
+_DOWNLOAD_CANCEL = threading.Event()
+
+
+class DownloadCancelled(RuntimeError):
+    pass
 
 
 def _source_host(url):
@@ -266,11 +271,11 @@ def _fetch_json_urls(urls, timeout=12, attempts=2):
     raise RuntimeError(f"无法读取下载信息：{last_error}")
 
 
-def _fetch_text_urls(urls, timeout=12):
+def _fetch_text_urls(urls, timeout=12, attempts=2):
     last_error = None
 
     for url in _rank_urls(urls):
-        for attempt in range(2):
+        for attempt in range(max(1, attempts)):
             try:
                 request = urllib.request.Request(
                     url,
@@ -290,7 +295,7 @@ def _fetch_text_urls(urls, timeout=12):
             except Exception as exc:
                 last_error = exc
                 _record_source(url, False)
-                if attempt == 0:
+                if attempt + 1 < attempts:
                     time.sleep(0.8)
 
     raise RuntimeError(f"无法读取下载信息：{last_error}")
@@ -316,6 +321,9 @@ def _download_urls(urls, target, sha1="", progress_callback=None):
         candidates = candidates * 2
 
     for index, url in enumerate(candidates):
+        if _DOWNLOAD_CANCEL.is_set():
+            raise DownloadCancelled("已取消")
+
         part = target.with_suffix(
             f"{target.suffix}.{index}.part"
         )
@@ -343,6 +351,8 @@ def _download_urls(urls, target, sha1="", progress_callback=None):
                     output.write(chunk)
                     digest.update(chunk)
                     downloaded += len(chunk)
+                    if _DOWNLOAD_CANCEL.is_set():
+                        raise DownloadCancelled("已取消")
                     if progress_callback:
                         progress_callback(downloaded, total_size)
 
@@ -352,6 +362,12 @@ def _download_urls(urls, target, sha1="", progress_callback=None):
             os.replace(part, target)
             _record_source(url, True)
             return str(target)
+        except DownloadCancelled:
+            try:
+                part.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
         except Exception as exc:
             last_error = exc
             _record_source(url, False)
@@ -498,16 +514,19 @@ class DownloadState:
         self.message = ""
         self.error = ""
         self.running = False
+        self.cancelled = False
         self.result = None
         self.completed = 0
         self.total = 0
 
     def begin(self, message):
+        _DOWNLOAD_CANCEL.clear()
         with self._lock:
             self.progress = 1
             self.message = message
             self.error = ""
             self.running = True
+            self.cancelled = False
             self.result = None
             self.completed = 0
             self.total = 0
@@ -542,6 +561,7 @@ class DownloadState:
             self.message = message
             self.error = ""
             self.running = False
+            self.cancelled = False
             self.result = result
 
     def fail(self, error):
@@ -550,6 +570,20 @@ class DownloadState:
             self.message = "下载失败"
             self.error = str(error)
             self.running = False
+            self.cancelled = False
+            self.result = None
+
+    def cancel(self):
+        _DOWNLOAD_CANCEL.set()
+
+        with self._lock:
+            if not self.running:
+                return
+            self.progress = 0
+            self.message = "已取消"
+            self.error = ""
+            self.running = False
+            self.cancelled = True
             self.result = None
 
     def snapshot(self):
@@ -559,6 +593,7 @@ class DownloadState:
                 "message": self.message,
                 "error": self.error,
                 "running": self.running,
+                "cancelled": self.cancelled,
                 "result": self.result,
                 "completed": self.completed,
                 "total": self.total,
@@ -611,6 +646,7 @@ class Api:
         )
         self._translation_loaded = False
         self._content_search_cache = {}
+        self._loader_cache = {}
         self._java_version_cache = {}
         self._java_choice_cache = {}
         self._java_candidates_cache = None
@@ -1927,7 +1963,11 @@ class Api:
             f"{BMCLAPI_BASE}/fabric-meta/v2/versions/loader/"
             f"{urllib.parse.quote(version_id)}"
         )
-        loaders = _fetch_json_urls((official_url, mirror_url))
+        loaders = _fetch_json_urls(
+            (mirror_url, official_url),
+            timeout=8,
+            attempts=1,
+        )
         result = []
 
         for item in loaders:
@@ -1948,23 +1988,31 @@ class Api:
 
         return result
 
-    def _maven_versions(self, mirror_url, official_url):
-        versions = set()
-
+    def _maven_versions(
+        self,
+        mirror_url,
+        official_url,
+        attempts=1,
+    ):
         for url in (mirror_url, official_url):
-            try:
-                text = _fetch_text_urls((url,))
-                versions.update(
-                    re.findall(
+            for _attempt in range(max(1, attempts)):
+                try:
+                    text = _fetch_text_urls(
+                        (url,),
+                        timeout=6,
+                        attempts=1,
+                    )
+                    versions = re.findall(
                         r"<version>([^<]+)</version>",
                         text,
                         flags=re.IGNORECASE,
                     )
-                )
-            except Exception:
-                continue
+                    if versions:
+                        return versions
+                except Exception:
+                    continue
 
-        return list(versions)
+        return []
 
     @staticmethod
     def _version_sort_key(value):
@@ -1977,21 +2025,43 @@ class Api:
         )
 
     def _forge_loaders(self, version_id):
-        versions = self._maven_versions(
-            (
-                f"{BMCLAPI_BASE}/maven/net/minecraftforge/forge/"
-                "maven-metadata.xml"
-            ),
-            (
-                "https://maven.minecraftforge.net/net/minecraftforge/"
-                "forge/maven-metadata.xml"
-            ),
-        )
-        matching = [
-            version
-            for version in versions
-            if version.startswith(f"{version_id}-")
-        ]
+        matching = []
+
+        try:
+            builds = _fetch_json_urls(
+                (
+                    f"{BMCLAPI_BASE}/forge/minecraft/"
+                    f"{urllib.parse.quote(version_id)}",
+                ),
+                timeout=6,
+                attempts=1,
+            )
+            matching = [
+                f"{version_id}-{item['version']}"
+                for item in builds
+                if isinstance(item, dict) and item.get("version")
+            ]
+        except Exception:
+            matching = []
+
+        if not matching:
+            versions = self._maven_versions(
+                (
+                    f"{BMCLAPI_BASE}/maven/net/minecraftforge/forge/"
+                    "maven-metadata.xml"
+                ),
+                (
+                    "https://maven.minecraftforge.net/net/minecraftforge/"
+                    "forge/maven-metadata.xml"
+                ),
+            )
+            matching = [
+                version
+                for version in versions
+                if version.startswith(f"{version_id}-")
+            ]
+
+        matching = list(dict.fromkeys(matching))
         matching.sort(
             key=self._version_sort_key,
             reverse=True,
@@ -2016,6 +2086,7 @@ class Api:
                 "https://maven.neoforged.net/releases/net/neoforged/"
                 "neoforge/maven-metadata.xml"
             ),
+            attempts=2,
         )
         parts = version_id.split(".")
         prefix = (
@@ -2043,6 +2114,17 @@ class Api:
         ]
 
     def get_version_loaders(self, version_id):
+        cached = self._loader_cache.get(version_id)
+
+        if cached and time.time() - cached[0] < 86400:
+            return cached[1]
+
+        disk = self._read_loader_cache(version_id)
+
+        if disk:
+            self._loader_cache[version_id] = (time.time(), disk)
+            return disk
+
         loaders = [
             {
                 "id": "vanilla",
@@ -2051,32 +2133,92 @@ class Api:
                 "description": "Minecraft 官方版本，不加载模组",
             }
         ]
-        warning = ""
+        warnings = []
+        executor = ThreadPoolExecutor(max_workers=3)
+        futures = {
+            executor.submit(self._fabric_loaders, version_id): "Fabric",
+            executor.submit(self._forge_loaders, version_id): "Forge",
+            executor.submit(self._neoforge_loaders, version_id): "NeoForge",
+        }
 
         try:
-            loaders.extend(self._fabric_loaders(version_id))
-        except Exception as exc:
-            warning = f"Fabric 加载器列表获取失败：{exc}"
+            for future in as_completed(futures, timeout=10):
+                label = futures[future]
+                try:
+                    loaders.extend(future.result())
+                except Exception as exc:
+                    warnings.append(f"{label} 获取失败：{exc}")
+        except TimeoutError:
+            warnings.append("部分加载器信息超时")
+        finally:
+            executor.shutdown(wait=False)
 
-        for loader_factory, label in (
-            (self._forge_loaders, "Forge"),
-            (self._neoforge_loaders, "NeoForge"),
-        ):
-            try:
-                loaders.extend(loader_factory(version_id))
-            except Exception as exc:
-                warning = (
-                    f"{warning}；{label} 加载器列表获取失败：{exc}"
-                    if warning
-                    else f"{label} 加载器列表获取失败：{exc}"
-                )
-
-        return {
+        result = {
             "ok": True,
             "version_id": version_id,
             "loaders": loaders,
-            "warning": warning,
+            "warning": "；".join(warnings),
         }
+        self._loader_cache[version_id] = (time.time(), result)
+
+        if len(loaders) > 1:
+            self._write_loader_cache(
+                version_id,
+                result,
+                partial=bool(warnings),
+            )
+
+        return result
+
+    def _loader_cache_path(self, version_id):
+        safe = re.sub(r'[<>:"/\\|?*]+', "_", str(version_id))
+        return (
+            self.config_path.parent
+            / "cache"
+            / "loaders"
+            / f"{safe}.json"
+        )
+
+    def _read_loader_cache(self, version_id):
+        try:
+            data = json.loads(
+                self._loader_cache_path(version_id).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        max_age = 600 if data.get("partial") else 86400
+
+        if time.time() - float(data.get("saved_at") or 0) > max_age:
+            return None
+
+        result = data.get("result")
+        return result if isinstance(result, dict) else None
+
+    def _write_loader_cache(self, version_id, result, partial=False):
+        try:
+            path = self._loader_cache_path(version_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(
+                json.dumps(
+                    {
+                        "saved_at": time.time(),
+                        "partial": partial,
+                        "result": result,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temp, path)
+        except Exception:
+            pass
 
     def _download_game_root(self):
         info = self.imported_info or self._load_imported_info()
@@ -2915,6 +3057,8 @@ class Api:
                 result,
                 f"{installed_id} 下载完成",
             )
+        except DownloadCancelled:
+            self.download_state.cancel()
         except Exception as exc:
             try:
                 log_path = (
@@ -2939,6 +3083,12 @@ class Api:
 
     def get_download_status(self):
         return self.download_state.snapshot()
+
+    def cancel_download(self):
+        if not self.download_state.snapshot()["running"]:
+            return {"ok": False, "message": "没有进行中的下载"}
+        self.download_state.cancel()
+        return {"ok": True, "message": "已取消"}
 
     def _content_context(self):
         info = self.imported_info or self._load_imported_info()
@@ -3453,6 +3603,132 @@ class Api:
         )
         return response
 
+    def get_content_versions(
+        self,
+        category,
+        source,
+        project_id,
+        game_version,
+        loader,
+    ):
+        if category not in MODRINTH_PROJECT_TYPE:
+            return {"ok": False, "message": "该分类暂不支持"}
+
+        items = []
+
+        if source == "modrinth":
+            project = urllib.parse.quote(str(project_id))
+            versions = _fetch_json_urls(
+                (
+                    f"{MCIM_BASE}/modrinth/v2/project/{project}/version",
+                    f"https://api.modrinth.com/v2/project/{project}/version",
+                ),
+                timeout=10,
+                attempts=1,
+            )
+
+            for version in versions:
+                files = version.get("files") or []
+                primary = next(
+                    (
+                        item
+                        for item in files
+                        if item.get("primary")
+                    ),
+                    files[0] if files else None,
+                )
+                if not primary:
+                    continue
+                items.append(
+                    {
+                        "version_id": version.get("id", ""),
+                        "version_name": (
+                            version.get("version_number")
+                            or version.get("name")
+                            or ""
+                        ),
+                        "game_versions": version.get("game_versions") or [],
+                        "loaders": version.get("loaders") or [],
+                        "file_name": primary.get("filename") or "",
+                        "date": version.get("date_published") or "",
+                    }
+                )
+        elif source == "curseforge":
+            data = _fetch_json_urls(
+                (
+                    f"{MCIM_BASE}/curseforge/v1/mods/"
+                    f"{urllib.parse.quote(str(project_id))}"
+                    "/files?pageSize=50",
+                ),
+                timeout=10,
+                attempts=1,
+            )
+            loader_names = {
+                "Forge": "forge",
+                "Fabric": "fabric",
+                "NeoForge": "neoforge",
+                "Quilt": "quilt",
+            }
+
+            for item in data.get("data", []):
+                game_versions = item.get("gameVersions") or []
+                items.append(
+                    {
+                        "version_id": str(item.get("id") or ""),
+                        "version_name": (
+                            item.get("displayName")
+                            or item.get("fileName")
+                            or ""
+                        ),
+                        "game_versions": [
+                            value
+                            for value in game_versions
+                            if re.match(r"^\d+\.\d+", value)
+                        ],
+                        "loaders": [
+                            loader_names[value]
+                            for value in game_versions
+                            if value in loader_names
+                        ],
+                        "file_name": item.get("fileName") or "",
+                        "date": item.get("fileDate") or "",
+                    }
+                )
+        else:
+            return {"ok": False, "message": "未知的下载源"}
+
+        items.sort(
+            key=lambda item: item.get("date") or "",
+            reverse=True,
+        )
+
+        target_dir = ""
+        current_game_version = ""
+        current_loader = ""
+
+        try:
+            context = self._content_context()
+            current_game_version = context["game_version"]
+            current_loader = context["loader"]
+            folder = {
+                "mods": "mods",
+                "shaders": "shaderpacks",
+                "resourcepacks": "resourcepacks",
+            }[category]
+            target_dir = str(context["version_folder"] / folder)
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "items": items,
+            "target_dir": target_dir,
+            "game_version": game_version,
+            "loader": loader,
+            "current_game_version": current_game_version,
+            "current_loader": current_loader,
+        }
+
     def get_content_translations(self, items):
         if not isinstance(items, list):
             return {"ok": True, "translations": {}}
@@ -3498,6 +3774,7 @@ class Api:
         project_id,
         game_version,
         loader,
+        version_id="",
     ):
         project = urllib.parse.quote(str(project_id))
         versions = _fetch_json_urls(
@@ -3511,6 +3788,12 @@ class Api:
         compatible = []
 
         for version in versions:
+            if version_id:
+                if version.get("id") != version_id:
+                    continue
+                compatible.append(version)
+                continue
+
             if game_version and game_version not in version.get(
                 "game_versions",
                 [],
@@ -3532,7 +3815,11 @@ class Api:
         )
 
         if not compatible:
-            raise RuntimeError("没有找到兼容当前版本的文件")
+            raise RuntimeError(
+                "未找到所选模组版本"
+                if version_id
+                else "没有找到兼容当前版本的文件"
+            )
 
         version = compatible[0]
         files = version.get("files") or []
@@ -3557,13 +3844,14 @@ class Api:
         project_id,
         game_version,
         loader,
+        version_id="",
     ):
         url = (
             f"{MCIM_BASE}/curseforge/v1/mods/"
             f"{urllib.parse.quote(str(project_id))}/files"
             "?pageSize=50"
         )
-        data = _fetch_json_urls((url,))
+        data = _fetch_json_urls((url,), timeout=10, attempts=1)
         compatible = []
         loader_names = {
             "forge": "Forge",
@@ -3574,6 +3862,12 @@ class Api:
 
         for item in data.get("data", []):
             game_versions = item.get("gameVersions") or []
+            if version_id:
+                if str(item.get("id")) != str(version_id):
+                    continue
+                compatible.append(item)
+                continue
+
             if game_version and game_version not in game_versions:
                 continue
 
@@ -3593,7 +3887,11 @@ class Api:
         )
 
         if not compatible:
-            raise RuntimeError("没有找到兼容当前版本的文件")
+            raise RuntimeError(
+                "未找到所选模组版本"
+                if version_id
+                else "没有找到兼容当前版本的文件"
+            )
 
         file_info = compatible[0]
         sha1 = ""
@@ -3617,6 +3915,7 @@ class Api:
         title,
         slug,
         game_version="",
+        version_id="",
     ):
         current = self.download_state.snapshot()
         if current["running"]:
@@ -3631,6 +3930,7 @@ class Api:
                 title,
                 slug,
                 game_version,
+                version_id,
             ),
             daemon=True,
         )
@@ -3645,6 +3945,7 @@ class Api:
         title,
         slug,
         game_version="",
+        version_id="",
     ):
         self.download_state.begin(f"正在获取 {title}")
 
@@ -3662,6 +3963,7 @@ class Api:
                     project_id,
                     game_version,
                     loader,
+                    version_id,
                 )
             elif source == "curseforge":
                 file_info = self._content_file_curseforge(
@@ -3669,6 +3971,7 @@ class Api:
                     project_id,
                     game_version,
                     loader,
+                    version_id,
                 )
             else:
                 raise RuntimeError("未知的下载源")
@@ -3743,6 +4046,8 @@ class Api:
                 result,
                 f"{filename} 下载完成",
             )
+        except DownloadCancelled:
+            self.download_state.cancel()
         except Exception as exc:
             self.download_state.fail(exc)
 

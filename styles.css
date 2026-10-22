@@ -439,6 +439,79 @@ body {
   display: none !important;
 }
 
+.download-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: download-panel-in 280ms var(--ease-out);
+}
+
+.download-detail-panel[hidden] {
+  display: none !important;
+}
+
+.download-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.download-detail-title {
+  color: var(--launcher-ink);
+  font-size: 20px;
+}
+
+.download-detail-target {
+  color: var(--launcher-muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.download-detail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.download-detail-label {
+  color: var(--launcher-muted);
+  font-size: 12px;
+}
+
+.download-detail-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.download-detail-option {
+  padding: 7px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--theme-item-bg);
+  color: var(--launcher-ink);
+  font-size: 13px;
+}
+
+.download-detail-option.is-active {
+  border-color: var(--accent);
+  background: var(--glass-bg-blue);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.download-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.download-detail-actions button {
+  padding: 10px 18px;
+  border-radius: 14px;
+}
+
 .download-search-row {
   display: flex;
   align-items: center;
@@ -617,12 +690,29 @@ body {
 }
 
 .download-progress-panel {
+  position: relative;
   display: flex;
   min-height: 260px;
   align-items: center;
   justify-content: center;
   flex-direction: column;
   gap: 14px;
+}
+
+.download-cancel-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border-radius: 12px;
+}
+
+.download-cancel-button[hidden] {
+  display: none !important;
 }
 
 .download-progress-track {
@@ -1260,6 +1350,57 @@ button:focus-visible {
     0 0 0 1px rgb(255 255 255 / 0.55),
     0 0 30px rgb(88 169 242 / 0.42),
     0 18px 46px rgb(20 22 26 / 0.12);
+}
+
+.confirm-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(16 22 30 / 0.24);
+  backdrop-filter: blur(8px) saturate(1.2);
+}
+
+.confirm-dialog[hidden] {
+  display: none !important;
+}
+
+.confirm-card {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  background: var(--glass-bg-strong);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.7),
+    0 24px 60px rgb(16 22 30 / 0.22);
+}
+
+.confirm-message {
+  margin: 0 0 18px;
+  color: var(--launcher-ink);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-actions button {
+  min-width: 76px;
+  padding: 9px 16px;
+  border-radius: 12px;
+}
+
+.confirm-yes {
+  border-color: var(--accent);
+  background: var(--glass-bg-blue);
+  color: var(--accent);
 }
 
 .account-menu {

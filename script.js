@@ -65,6 +65,35 @@ const loaderOptionList = document.querySelector(".loader-option-list");
 const downloadPlaceholderPanel = document.querySelector(
   ".download-placeholder-panel"
 );
+const downloadDetailPanel = document.querySelector(
+  ".download-detail-panel"
+);
+const downloadDetailTitle = document.querySelector(
+  ".download-detail-title"
+);
+const downloadDetailTarget = document.querySelector(
+  ".download-detail-target"
+);
+const detailGameVersions = document.querySelector(
+  ".detail-game-versions"
+);
+const detailLoaders = document.querySelector(".detail-loaders");
+const detailModVersions = document.querySelector(
+  ".detail-mod-versions"
+);
+const downloadDetailBack = document.querySelector(
+  ".download-detail-back"
+);
+const downloadDetailDownload = document.querySelector(
+  ".download-detail-download"
+);
+const downloadCancelButton = document.querySelector(
+  ".download-cancel-button"
+);
+const confirmDialog = document.querySelector(".confirm-dialog");
+const confirmMessage = document.querySelector(".confirm-message");
+const confirmYes = document.querySelector(".confirm-yes");
+const confirmNo = document.querySelector(".confirm-no");
 const downloadPlaceholderTitle = document.querySelector(
   ".download-placeholder-title"
 );
@@ -176,6 +205,15 @@ let contentSearchPending = false;
 let contentGameVersion = "";
 let contentVersionManual = false;
 const contentTranslations = new Map();
+let detailItem = null;
+let detailVersions = [];
+let detailTargetDir = "";
+let detailCurrentGameVersion = "";
+let detailCurrentLoader = "";
+let selectedDetailGameVersion = "";
+let selectedDetailLoader = "";
+let selectedDetailVersion = null;
+let pendingDownloadAction = null;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -595,6 +633,8 @@ function showDownloadPanel(panel) {
     panel !== downloadPlaceholderPanel;
   downloadProgressPanel.hidden =
     panel !== downloadProgressPanel;
+  downloadDetailPanel.hidden =
+    panel !== downloadDetailPanel;
 }
 
 function appendDownloadVersions(list, versions) {
@@ -905,7 +945,7 @@ function renderContentResults(items) {
 
     button.append(icon, copy, meta);
     button.addEventListener("click", () => {
-      handleContentDownload(item);
+      openContentDetail(item);
     });
     fragment.appendChild(button);
   }
@@ -980,7 +1020,252 @@ function startDownloadPolling() {
   pollDownloadStatus();
 }
 
-async function handleContentDownload(item) {
+const LOADER_LABELS = {
+  "": "原版",
+  vanilla: "原版",
+  fabric: "Fabric",
+  forge: "Forge",
+  neoforge: "NeoForge",
+  quilt: "Quilt",
+};
+
+function loaderLabel(value) {
+  return LOADER_LABELS[value] || value || "原版";
+}
+
+function addDetailOption(container, value, label, active, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `download-detail-option${
+    active ? " is-active" : ""
+  }`;
+  button.dataset.value = value;
+  button.textContent = label;
+  button.addEventListener("click", handler);
+  container.appendChild(button);
+}
+
+function renderDetailOptions() {
+  const gameVersions = Array.from(
+    new Set(
+      detailVersions.flatMap((item) => item.game_versions || [])
+    )
+  );
+  gameVersions.sort((a, b) =>
+    String(b).localeCompare(String(a), undefined, { numeric: true })
+  );
+
+  if (detailCurrentGameVersion) {
+    const index = gameVersions.indexOf(detailCurrentGameVersion);
+    if (index > 0) {
+      gameVersions.splice(index, 1);
+      gameVersions.unshift(detailCurrentGameVersion);
+    }
+  }
+
+  if (!gameVersions.includes(selectedDetailGameVersion)) {
+    selectedDetailGameVersion = gameVersions[0] || "";
+  }
+
+  detailGameVersions.replaceChildren();
+  gameVersions.slice(0, 24).forEach((value) => {
+    addDetailOption(
+      detailGameVersions,
+      value,
+      value,
+      value === selectedDetailGameVersion,
+      () => {
+        selectedDetailGameVersion = value;
+        selectedDetailVersion = null;
+        renderDetailOptions();
+      }
+    );
+  });
+
+  const scoped = detailVersions.filter(
+    (item) =>
+      !selectedDetailGameVersion ||
+      (item.game_versions || []).includes(selectedDetailGameVersion)
+  );
+  const pool = scoped.length ? scoped : detailVersions;
+  const loaders = Array.from(
+    new Set(pool.flatMap((item) => item.loaders || []))
+  );
+
+  if (!loaders.includes(selectedDetailLoader)) {
+    selectedDetailLoader = loaders.includes(detailCurrentLoader)
+      ? detailCurrentLoader
+      : loaders[0] || "";
+  }
+
+  detailLoaders.replaceChildren();
+  loaders.forEach((value) => {
+    addDetailOption(
+      detailLoaders,
+      value,
+      loaderLabel(value),
+      value === selectedDetailLoader,
+      () => {
+        selectedDetailLoader = value;
+        selectedDetailVersion = null;
+        renderDetailOptions();
+      }
+    );
+  });
+
+  const matches = pool
+    .filter(
+      (item) =>
+        !selectedDetailLoader ||
+        (item.loaders || []).includes(selectedDetailLoader)
+    )
+    .sort((a, b) =>
+      String(b.date || "").localeCompare(String(a.date || ""))
+    );
+
+  if (
+    !matches.some(
+      (item) => item.version_id === selectedDetailVersion?.version_id
+    )
+  ) {
+    selectedDetailVersion = matches[0] || null;
+  }
+
+  detailModVersions.replaceChildren();
+
+  if (!matches.length) {
+    const empty = document.createElement("span");
+    empty.className = "download-detail-target";
+    empty.textContent = "无可用版本";
+    detailModVersions.appendChild(empty);
+  }
+
+  matches.slice(0, 30).forEach((item) => {
+    addDetailOption(
+      detailModVersions,
+      item.version_id,
+      item.version_name || item.file_name || item.version_id,
+      item.version_id === selectedDetailVersion?.version_id,
+      () => {
+        selectedDetailVersion = item;
+        renderDetailOptions();
+      }
+    );
+  });
+
+  downloadDetailDownload.disabled = !selectedDetailVersion;
+}
+
+async function openContentDetail(item) {
+  if (!window.pywebview?.api?.get_content_versions) {
+    return;
+  }
+
+  detailItem = item;
+  detailVersions = [];
+  selectedDetailVersion = null;
+  selectedDetailGameVersion = "";
+  selectedDetailLoader = "";
+  downloadDetailTitle.textContent = contentDisplayTitle(item);
+  downloadDetailTarget.textContent = "";
+  detailGameVersions.replaceChildren();
+  detailLoaders.replaceChildren();
+  detailModVersions.replaceChildren();
+  downloadDetailDownload.disabled = true;
+  showDownloadPanel(downloadDetailPanel);
+
+  const loading = document.createElement("span");
+  loading.className = "download-detail-target";
+  loading.textContent = "正在加载";
+  detailModVersions.appendChild(loading);
+
+  try {
+    const result =
+      await window.pywebview.api.get_content_versions(
+        selectedDownloadCategory,
+        item.source,
+        item.project_id,
+        readContentGameVersion(),
+        ""
+      );
+
+    if (!result.ok) {
+      throw new Error(result.message || "读取模组版本失败");
+    }
+
+    detailVersions = result.items || [];
+    detailTargetDir = result.target_dir || "";
+    detailCurrentGameVersion =
+      result.current_game_version || selectedGameVersion || "";
+    detailCurrentLoader = result.current_loader || "";
+    downloadDetailTarget.textContent = detailTargetDir
+      ? `保存到 ${detailTargetDir}`
+      : "请先导入游戏版本";
+    renderDetailOptions();
+  } catch (error) {
+    detailModVersions.replaceChildren();
+    const message = document.createElement("span");
+    message.className = "download-detail-target";
+    message.textContent = error?.message || "读取模组版本失败";
+    detailModVersions.appendChild(message);
+  }
+}
+
+function showConfirm(message, action) {
+  confirmMessage.textContent = message;
+  pendingDownloadAction = action;
+  confirmDialog.hidden = false;
+  confirmYes.focus();
+}
+
+function closeConfirm() {
+  confirmDialog.hidden = true;
+  pendingDownloadAction = null;
+}
+
+function startDetailDownload() {
+  if (selectedDetailVersion) {
+    handleContentDownload(detailItem, selectedDetailVersion.version_id);
+  }
+}
+
+function requestDetailDownload() {
+  if (!detailItem || !selectedDetailVersion) {
+    return;
+  }
+
+  const messages = [];
+
+  if (
+    detailCurrentGameVersion &&
+    selectedDetailGameVersion &&
+    detailCurrentGameVersion !== selectedDetailGameVersion
+  ) {
+    messages.push(
+      `当前游戏版本为${detailCurrentGameVersion}，与${detailItem.title}的${selectedDetailGameVersion}版本不匹配，是否下载`
+    );
+  }
+
+  if (
+    selectedDownloadCategory === "mods" &&
+    detailCurrentLoader &&
+    selectedDetailLoader &&
+    detailCurrentLoader !== selectedDetailLoader
+  ) {
+    messages.push(
+      `当前游戏加载器为${loaderLabel(detailCurrentLoader)}，与${detailItem.title}的${loaderLabel(selectedDetailLoader)}加载器不匹配，是否下载`
+    );
+  }
+
+  if (messages.length) {
+    showConfirm(messages.join("；"), startDetailDownload);
+    return;
+  }
+
+  startDetailDownload();
+}
+
+async function handleContentDownload(item, versionId = "") {
   if (!window.pywebview?.api?.start_content_download) {
     return;
   }
@@ -988,6 +1273,8 @@ async function handleContentDownload(item) {
   downloadConfirmButton.hidden = true;
   downloadFinished = false;
   showDownloadPanel(downloadProgressPanel);
+  downloadCancelButton.hidden = false;
+  downloadCancelButton.disabled = false;
   updateDownloadProgress({
     progress: 1,
     message: `准备下载 ${item.title}`,
@@ -1007,7 +1294,8 @@ async function handleContentDownload(item) {
         item.project_id,
         item.title,
         item.slug || "",
-        readContentGameVersion()
+        readContentGameVersion(),
+        versionId
       );
 
     if (!result.ok) {
@@ -1016,6 +1304,7 @@ async function handleContentDownload(item) {
 
     startDownloadPolling();
   } catch (error) {
+    downloadCancelButton.hidden = true;
     downloadProgressMessage.textContent =
       error?.message || "无法开始下载";
   }
@@ -1075,6 +1364,37 @@ function openDownloadCenter() {
   }
 }
 
+function createLoaderOption(loader) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "loader-option";
+  item.dataset.loaderId = loader.id;
+
+  const name = document.createElement("strong");
+  name.textContent = loader.version
+    ? `${loader.name} ${loader.version}`
+    : loader.name;
+  const description = document.createElement("span");
+  description.textContent = loader.description || "";
+  item.append(name, description);
+
+  item.addEventListener("click", () => {
+    selectedDownloadLoaderId = loader.id;
+    loaderOptionList
+      .querySelectorAll(".loader-option")
+      .forEach((option) => {
+        option.classList.toggle(
+          "is-active",
+          option.dataset.loaderId === loader.id
+        );
+      });
+    downloadConfirmButton.hidden = false;
+    downloadConfirmButton.disabled = false;
+  });
+
+  return item;
+}
+
 async function openLoaderSelection(versionId) {
   if (!window.pywebview?.api?.get_version_loaders) {
     return;
@@ -1088,6 +1408,15 @@ async function openLoaderSelection(versionId) {
   downloadConfirmButton.hidden = true;
   downloadConfirmButton.disabled = true;
   showDownloadPanel(downloadLoaderPanel);
+
+  loaderOptionList.appendChild(
+    createLoaderOption({
+      id: "vanilla",
+      name: "原版",
+      version: "",
+      description: "Minecraft 官方版本，不加载模组",
+    })
+  );
 
   const loading = document.createElement("div");
   loading.className = "download-loading";
@@ -1105,33 +1434,7 @@ async function openLoaderSelection(versionId) {
     loaderOptionList.replaceChildren();
 
     for (const loader of result.loaders) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "loader-option";
-      item.dataset.loaderId = loader.id;
-
-      const name = document.createElement("strong");
-      name.textContent = loader.version
-        ? `${loader.name} ${loader.version}`
-        : loader.name;
-      const description = document.createElement("span");
-      description.textContent = loader.description || "";
-      item.append(name, description);
-
-      item.addEventListener("click", () => {
-        selectedDownloadLoaderId = loader.id;
-        loaderOptionList
-          .querySelectorAll(".loader-option")
-          .forEach((option) => {
-            option.classList.toggle(
-              "is-active",
-              option.dataset.loaderId === loader.id
-            );
-          });
-        downloadConfirmButton.hidden = false;
-        downloadConfirmButton.disabled = false;
-      });
-      loaderOptionList.appendChild(item);
+      loaderOptionList.appendChild(createLoaderOption(loader));
     }
   } catch (error) {
     loaderOptionList.replaceChildren();
@@ -1194,6 +1497,8 @@ function openDownloadTaskView() {
   launcher.dataset.view = "download";
   showDownloadPanel(downloadProgressPanel);
   updateDownloadProgress(activeDownloadTask);
+  downloadCancelButton.hidden = !activeDownloadTask.running;
+  downloadCancelButton.disabled = false;
   downloadConfirmButton.hidden = Boolean(activeDownloadTask.running);
   downloadConfirmButton.disabled = Boolean(activeDownloadTask.running);
 
@@ -1217,10 +1522,24 @@ async function pollDownloadStatus() {
     updateDownloadProgress(status);
     syncDownloadRing(status);
     setLaunchStatus(status.error || status.message || "正在下载", Boolean(status.error));
+    downloadCancelButton.hidden = !status.running;
+    downloadCancelButton.disabled = false;
+
+    if (status.cancelled) {
+      clearInterval(downloadPollTimer);
+      downloadPollTimer = null;
+      downloadCancelButton.hidden = true;
+      downloadConfirmButton.hidden = false;
+      downloadConfirmButton.disabled = false;
+      downloadConfirmButton.textContent = "重试";
+      downloadFinished = false;
+      return;
+    }
 
     if (status.error) {
       clearInterval(downloadPollTimer);
       downloadPollTimer = null;
+      downloadCancelButton.hidden = true;
       downloadConfirmButton.hidden = false;
       downloadConfirmButton.disabled = false;
       downloadConfirmButton.textContent = "重试";
@@ -1231,6 +1550,7 @@ async function pollDownloadStatus() {
     if (!status.running && status.progress >= 100) {
       clearInterval(downloadPollTimer);
       downloadPollTimer = null;
+      downloadCancelButton.hidden = true;
       downloadFinished = true;
       downloadConfirmButton.hidden = false;
       downloadConfirmButton.disabled = false;
@@ -1262,6 +1582,8 @@ async function startSelectedDownload() {
 
   downloadConfirmButton.hidden = true;
   showDownloadPanel(downloadProgressPanel);
+  downloadCancelButton.hidden = false;
+  downloadCancelButton.disabled = false;
   updateDownloadProgress({
     progress: 1,
     message: "正在准备下载",
@@ -1295,6 +1617,11 @@ async function startSelectedDownload() {
 }
 
 function handleDownloadBack() {
+  if (!downloadDetailPanel.hidden) {
+    showDownloadPanel(downloadBrowserPanel);
+    return;
+  }
+
   if (!downloadLoaderPanel.hidden) {
     selectedDownloadVersionId = "";
     selectedDownloadLoaderId = "";
@@ -1305,6 +1632,7 @@ function handleDownloadBack() {
     return;
   }
 
+  downloadCancelButton.hidden = true;
   launcher.dataset.view = "home";
 }
 
@@ -1612,6 +1940,12 @@ async function loadAppState() {
       loadAccount(),
       refreshJavaStatus(),
     ]);
+
+    if (selectedGameVersion) {
+      Promise.resolve(
+        window.pywebview.api.get_version_loaders(selectedGameVersion)
+      ).catch(() => {});
+    }
   } catch {
     // Ignore transient startup failures; the UI keeps its default state.
   }
@@ -1842,6 +2176,34 @@ downloadConfirmButton.addEventListener(
   "click",
   startSelectedDownload
 );
+downloadDetailBack.addEventListener("click", () => {
+  showDownloadPanel(downloadBrowserPanel);
+});
+downloadDetailDownload.addEventListener(
+  "click",
+  requestDetailDownload
+);
+confirmYes.addEventListener("click", () => {
+  const action = pendingDownloadAction;
+  closeConfirm();
+  if (action) {
+    action();
+  }
+});
+confirmNo.addEventListener("click", closeConfirm);
+downloadCancelButton.addEventListener("click", async () => {
+  if (!window.pywebview?.api?.cancel_download) {
+    return;
+  }
+
+  downloadCancelButton.disabled = true;
+
+  try {
+    await window.pywebview.api.cancel_download();
+  } catch {
+    downloadCancelButton.disabled = false;
+  }
+});
 
 downloadCategoryButtons.forEach((button) => {
   button.addEventListener("click", () => {
