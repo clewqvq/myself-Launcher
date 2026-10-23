@@ -187,6 +187,64 @@
           <div class="import-row">
             <button class="import-button" type="button">导入文件夹</button>
           </div>
+          <button
+            class="content-manage-button"
+            type="button"
+            aria-label="版本内容"
+            title="版本内容"
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                d="M8 7h11M8 12h11M8 17h11M4.5 7h.01M4.5 12h.01M4.5 17h.01"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </section>
+
+      <section class="manage-view" aria-label="版本内容">
+        <div class="manage-panel">
+          <div class="manage-header">
+            <button
+              class="manage-back"
+              type="button"
+              aria-label="返回"
+            >‹</button>
+            <strong class="manage-title">版本内容</strong>
+            <span class="manage-version"></span>
+          </div>
+          <div class="manage-layout">
+            <aside class="manage-tabs">
+              <button
+                class="manage-tab is-active"
+                type="button"
+                data-manage-category="mods"
+              >模组</button>
+              <button
+                class="manage-tab"
+                type="button"
+                data-manage-category="shaders"
+              >光影</button>
+              <button
+                class="manage-tab"
+                type="button"
+                data-manage-category="resourcepacks"
+              >材质包</button>
+            </aside>
+            <div class="manage-content">
+              <div class="manage-list"></div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -550,6 +608,35 @@
           <div class="confirm-actions">
             <button class="confirm-yes" type="button">是</button>
             <button class="confirm-no" type="button">否</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="manage-menu" hidden>
+        <button class="manage-menu-detail" type="button">详情</button>
+        <button class="manage-menu-delete" type="button">删除</button>
+        <button class="manage-menu-toggle" type="button">禁用</button>
+      </div>
+
+      <div class="manage-detail-dialog" hidden>
+        <div class="manage-detail-card">
+          <strong class="manage-detail-name"></strong>
+          <span class="manage-detail-english"></span>
+          <span class="manage-detail-meta"></span>
+          <span class="manage-detail-path"></span>
+          <div class="manage-detail-actions">
+            <button
+              class="manage-detail-toggle"
+              type="button"
+            >禁用</button>
+            <button
+              class="manage-detail-delete"
+              type="button"
+            >删除</button>
+            <button
+              class="manage-detail-close"
+              type="button"
+            >关闭</button>
           </div>
         </div>
       </div>

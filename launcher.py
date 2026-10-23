@@ -241,6 +241,37 @@ def _hidden_process_kwargs():
     return {}
 
 
+def _send_to_recycle_bin(path):
+    if os.name != "nt":
+        raise RuntimeError("仅支持 Windows 回收站")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_uint16),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    operation = SHFILEOPSTRUCTW()
+    operation.wFunc = 3  # FO_DELETE
+    operation.pFrom = str(Path(path).resolve()) + "\0"
+    operation.fFlags = 0x0040 | 0x0010 | 0x0004
+    result = ctypes.windll.shell32.SHFileOperationW(
+        ctypes.byref(operation)
+    )
+
+    if result != 0 or operation.fAnyOperationsAborted:
+        raise RuntimeError(f"无法移入回收站（代码 {result}）")
+
+
 def _fetch_json_urls(urls, timeout=12, attempts=2):
     last_error = None
 
@@ -640,6 +671,7 @@ class Api:
         self._manifest_cache = None
         self._manifest_cache_time = 0
         self._translation_cache = {}
+        self._query_translation_cache = {}
         self._translation_misses = set()
         self._translation_path = (
             self.config_path.parent / "translations.json"
@@ -2924,7 +2956,12 @@ class Api:
         self.imported_info = info
         return info
 
-    def start_version_download(self, version_id, loader_id):
+    def start_version_download(
+        self,
+        version_id,
+        loader_id,
+        target_root="",
+    ):
         current = self.download_state.snapshot()
 
         if current["running"]:
@@ -2946,13 +2983,13 @@ class Api:
 
         thread = threading.Thread(
             target=self._download_worker,
-            args=(version_id, loader_id),
+            args=(version_id, loader_id, target_root),
             daemon=True,
         )
         thread.start()
         return {"ok": True, "message": "已开始下载"}
 
-    def _download_worker(self, version_id, loader_id):
+    def _download_worker(self, version_id, loader_id, target_root=""):
         self.download_state.begin(f"正在获取 Minecraft {version_id}")
 
         try:
@@ -2987,7 +3024,11 @@ class Api:
             version_json = json.loads(
                 version_json_path.read_text(encoding="utf-8")
             )
-            game_root = self._download_game_root()
+            game_root = (
+                Path(str(target_root)).resolve()
+                if str(target_root or "").strip()
+                else self._download_game_root()
+            )
             game_root.mkdir(parents=True, exist_ok=True)
 
             self.download_state.update(
@@ -3090,6 +3131,55 @@ class Api:
         self.download_state.cancel()
         return {"ok": True, "message": "已取消"}
 
+    def choose_download_folder(self, category):
+        try:
+            if category in (
+                "mods",
+                "shaders",
+                "resourcepacks",
+            ):
+                context = self._content_context()
+                folder = {
+                    "mods": "mods",
+                    "shaders": "shaderpacks",
+                    "resourcepacks": "resourcepacks",
+                }[category]
+                default = context["version_folder"] / folder
+            else:
+                default = self._download_game_root()
+        except Exception:
+            default = self.config_path.parent / "minecraft"
+
+        try:
+            default.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        try:
+            window = webview.windows[0] if webview.windows else None
+            if window is None:
+                return {"ok": False, "message": "窗口不可用"}
+            result = window.create_file_dialog(
+                webview.FOLDER_DIALOG,
+                directory=str(default),
+                allow_multiple=False,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "message": f"无法打开文件夹选择器：{exc}",
+            }
+
+        if not result:
+            return {
+                "ok": False,
+                "cancelled": True,
+                "message": "未选择保存位置",
+            }
+
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        return {"ok": True, "path": str(path)}
+
     def _content_context(self):
         info = self.imported_info or self._load_imported_info()
 
@@ -3135,6 +3225,38 @@ class Api:
             "game_root": Path(info["game_root"]),
             "version_folder": Path(info["version_folder"]),
         }
+
+    def _mcmod_english_name(self, query):
+        query = str(query or "").strip()
+
+        if not query:
+            return ""
+
+        if query in self._query_translation_cache:
+            return self._query_translation_cache[query]
+
+        self._load_translation_cache()
+
+        for key, value in self._translation_cache.items():
+            if value == query and re.search(r"[a-z]", key):
+                self._query_translation_cache[query] = key
+                return key
+
+        for candidate in self._mcmod_fetch_names(query):
+            match = re.search(r"\(([^()]*)\)", candidate)
+
+            if not match:
+                continue
+
+            english = re.sub(r"<[^>]+>", " ", match.group(1))
+            english = re.sub(r"\s+", " ", english).strip()
+
+            if english and re.search(r"[A-Za-z]", english):
+                self._query_translation_cache[query] = english
+                return english
+
+        self._query_translation_cache[query] = ""
+        return ""
 
     def _mcmod_translation(self, title, slug=""):
         keys = [
@@ -3518,6 +3640,13 @@ class Api:
         if cached and time.time() - cached[0] < 300:
             return cached[1]
 
+        search_query = str(query or "").strip()
+
+        if search_query and re.search(r"[\u4e00-\u9fff]", search_query):
+            english = self._mcmod_english_name(search_query)
+            if english:
+                search_query = english
+
         if not loader:
             try:
                 loader = self._content_context().get("loader", "")
@@ -3534,7 +3663,7 @@ class Api:
             executor.submit(
                 self._search_modrinth,
                 category,
-                query,
+                search_query,
                 game_version,
                 loader,
                 fetch_count,
@@ -3542,7 +3671,7 @@ class Api:
             executor.submit(
                 self._search_curseforge,
                 category,
-                query,
+                search_query,
                 game_version,
                 loader,
                 fetch_count,
@@ -3728,6 +3857,123 @@ class Api:
             "current_game_version": current_game_version,
             "current_loader": current_loader,
         }
+
+    def _version_content_folder(self, category):
+        folder_name = {
+            "mods": "mods",
+            "shaders": "shaderpacks",
+            "resourcepacks": "resourcepacks",
+        }.get(category)
+
+        if not folder_name:
+            raise RuntimeError("不支持的分类")
+
+        context = self._content_context()
+        return context["version_folder"] / folder_name
+
+    def list_version_content(self, category):
+        try:
+            folder = self._version_content_folder(category)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+        self._load_translation_cache()
+        items = []
+
+        if folder.is_dir():
+            for path in sorted(folder.iterdir()):
+                if not path.is_file():
+                    continue
+
+                name = path.name
+                disabled = name.lower().endswith(".disabled")
+                base = name[:-9] if disabled else name
+
+                if Path(base).suffix.lower() not in (".jar", ".zip"):
+                    continue
+
+                stem = Path(base).stem
+                bracket = re.match(r"^\[([^\]]+)\]", stem)
+                chinese = bracket.group(1).strip() if bracket else ""
+                english = re.sub(
+                    r"^\[[^\]]+\]",
+                    "",
+                    stem,
+                ).strip()
+
+                if not chinese:
+                    lowered = english.lower()
+                    for key, value in self._translation_cache.items():
+                        if value and key and key in lowered:
+                            chinese = value
+                            break
+
+                items.append(
+                    {
+                        "file": name,
+                        "english_name": english or stem,
+                        "chinese_name": "" if chinese == english else chinese,
+                        "disabled": disabled,
+                        "size": path.stat().st_size,
+                    }
+                )
+
+        return {
+            "ok": True,
+            "folder": str(folder),
+            "items": items,
+        }
+
+    def toggle_version_content(self, category, filename):
+        try:
+            folder = self._version_content_folder(category)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+        path = folder / Path(str(filename)).name
+
+        if not path.is_file():
+            return {"ok": False, "message": "文件不存在"}
+
+        if path.name.lower().endswith(".disabled"):
+            target = path.with_name(path.name[:-9])
+        else:
+            target = path.with_name(path.name + ".disabled")
+
+        try:
+            path.rename(target)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+        return {
+            "ok": True,
+            "file": target.name,
+            "disabled": target.name.lower().endswith(".disabled"),
+        }
+
+    def delete_version_content(self, category, filename):
+        try:
+            folder = self._version_content_folder(category)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+
+        path = folder / Path(str(filename)).name
+
+        if not path.is_file():
+            return {"ok": False, "message": "文件不存在"}
+
+        try:
+            _send_to_recycle_bin(path)
+        except Exception:
+            trash = self.config_path.parent / "trash"
+            trash.mkdir(parents=True, exist_ok=True)
+            target = trash / f"{int(time.time())}-{path.name}"
+            try:
+                shutil.move(str(path), str(target))
+            except Exception as exc:
+                return {"ok": False, "message": str(exc)}
+
+        return {"ok": True, "file": path.name}
 
     def get_content_translations(self, items):
         if not isinstance(items, list):
@@ -3916,6 +4162,7 @@ class Api:
         slug,
         game_version="",
         version_id="",
+        target_dir="",
     ):
         current = self.download_state.snapshot()
         if current["running"]:
@@ -3931,6 +4178,7 @@ class Api:
                 slug,
                 game_version,
                 version_id,
+                target_dir,
             ),
             daemon=True,
         )
@@ -3946,6 +4194,7 @@ class Api:
         slug,
         game_version="",
         version_id="",
+        target_dir="",
     ):
         self.download_state.begin(f"正在获取 {title}")
 
@@ -4008,11 +4257,15 @@ class Api:
 
             file_version = self._safe_content_name(raw_version)
 
-            target_folder = context["version_folder"] / {
-                "mods": "mods",
-                "shaders": "shaderpacks",
-                "resourcepacks": "resourcepacks",
-            }[category]
+            target_folder = (
+                Path(str(target_dir)).expanduser()
+                if str(target_dir or "").strip()
+                else context["version_folder"] / {
+                    "mods": "mods",
+                    "shaders": "shaderpacks",
+                    "resourcepacks": "resourcepacks",
+                }[category]
+            )
             target_folder.mkdir(parents=True, exist_ok=True)
 
             filename = (

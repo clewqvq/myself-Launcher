@@ -94,6 +94,35 @@ const confirmDialog = document.querySelector(".confirm-dialog");
 const confirmMessage = document.querySelector(".confirm-message");
 const confirmYes = document.querySelector(".confirm-yes");
 const confirmNo = document.querySelector(".confirm-no");
+const contentManageButton = document.querySelector(
+  ".content-manage-button"
+);
+const manageBack = document.querySelector(".manage-back");
+const manageVersion = document.querySelector(".manage-version");
+const manageTabs = document.querySelectorAll(".manage-tab");
+const manageList = document.querySelector(".manage-list");
+const manageMenu = document.querySelector(".manage-menu");
+const manageMenuDetail = document.querySelector(".manage-menu-detail");
+const manageMenuDelete = document.querySelector(".manage-menu-delete");
+const manageMenuToggle = document.querySelector(".manage-menu-toggle");
+const manageDetailDialog = document.querySelector(
+  ".manage-detail-dialog"
+);
+const manageDetailName = document.querySelector(".manage-detail-name");
+const manageDetailEnglish = document.querySelector(
+  ".manage-detail-english"
+);
+const manageDetailMeta = document.querySelector(".manage-detail-meta");
+const manageDetailPath = document.querySelector(".manage-detail-path");
+const manageDetailToggle = document.querySelector(
+  ".manage-detail-toggle"
+);
+const manageDetailDelete = document.querySelector(
+  ".manage-detail-delete"
+);
+const manageDetailClose = document.querySelector(
+  ".manage-detail-close"
+);
 const downloadPlaceholderTitle = document.querySelector(
   ".download-placeholder-title"
 );
@@ -214,6 +243,11 @@ let selectedDetailGameVersion = "";
 let selectedDetailLoader = "";
 let selectedDetailVersion = null;
 let pendingDownloadAction = null;
+let manageCategory = "mods";
+let manageFolder = "";
+let manageItems = [];
+let manageSelectedItem = null;
+let manageMenuItem = null;
 const STORAGE_KEY = "minecraft-launcher-version";
 const SETTINGS_STORAGE_KEY = "minecraft-launcher-settings";
 
@@ -1270,6 +1304,21 @@ async function handleContentDownload(item, versionId = "") {
     return;
   }
 
+  let targetDir = "";
+
+  if (window.pywebview?.api?.choose_download_folder) {
+    const chosen =
+      await window.pywebview.api.choose_download_folder(
+        selectedDownloadCategory
+      );
+
+    if (chosen?.cancelled) {
+      return;
+    }
+
+    targetDir = chosen?.ok ? chosen.path || "" : "";
+  }
+
   downloadConfirmButton.hidden = true;
   downloadFinished = false;
   showDownloadPanel(downloadProgressPanel);
@@ -1295,7 +1344,8 @@ async function handleContentDownload(item, versionId = "") {
         item.title,
         item.slug || "",
         readContentGameVersion(),
-        versionId
+        versionId,
+        targetDir
       );
 
     if (!result.ok) {
@@ -1580,6 +1630,19 @@ async function startSelectedDownload() {
     return;
   }
 
+  let targetRoot = "";
+
+  if (window.pywebview?.api?.choose_download_folder) {
+    const chosen =
+      await window.pywebview.api.choose_download_folder("vanilla");
+
+    if (chosen?.cancelled) {
+      return;
+    }
+
+    targetRoot = chosen?.ok ? chosen.path || "" : "";
+  }
+
   downloadConfirmButton.hidden = true;
   showDownloadPanel(downloadProgressPanel);
   downloadCancelButton.hidden = false;
@@ -1599,7 +1662,8 @@ async function startSelectedDownload() {
     const result =
       await window.pywebview.api.start_version_download(
         selectedDownloadVersionId,
-        selectedDownloadLoaderId
+        selectedDownloadLoaderId,
+        targetRoot
       );
 
     if (!result.ok) {
@@ -1634,6 +1698,189 @@ function handleDownloadBack() {
 
   downloadCancelButton.hidden = true;
   launcher.dataset.view = "home";
+}
+
+function formatManageSize(size) {
+  const value = Number(size) || 0;
+
+  if (value >= 1048576) {
+    return `${(value / 1048576).toFixed(1)} MB`;
+  }
+
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${value} B`;
+}
+
+function closeManageMenu() {
+  manageMenu.hidden = true;
+  manageMenuItem = null;
+}
+
+function closeManageDetail() {
+  manageDetailDialog.hidden = true;
+  manageSelectedItem = null;
+}
+
+function renderManageList() {
+  manageList.replaceChildren();
+
+  if (!manageItems.length) {
+    const empty = document.createElement("span");
+    empty.className = "manage-empty";
+    empty.textContent = "暂无内容";
+    manageList.appendChild(empty);
+    return;
+  }
+
+  for (const item of manageItems) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `manage-item${
+      item.disabled ? " is-disabled" : ""
+    }`;
+
+    const copy = document.createElement("span");
+    copy.className = "manage-item-copy";
+    const name = document.createElement("strong");
+    name.className = "manage-item-name";
+    name.textContent = item.chinese_name || item.english_name;
+    copy.appendChild(name);
+
+    if (item.chinese_name) {
+      const english = document.createElement("span");
+      english.className = "manage-item-english";
+      english.textContent = item.english_name;
+      copy.appendChild(english);
+    }
+
+    const state = document.createElement("span");
+    state.className = "manage-item-state";
+    state.textContent = item.disabled ? "已禁用" : "";
+    button.append(copy, state);
+
+    button.addEventListener("click", () => openManageDetail(item));
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showManageMenu(event.clientX, event.clientY, item);
+    });
+    manageList.appendChild(button);
+  }
+}
+
+async function loadManageList() {
+  manageList.replaceChildren();
+  const loading = document.createElement("span");
+  loading.className = "manage-empty";
+  loading.textContent = "正在加载";
+  manageList.appendChild(loading);
+
+  if (!window.pywebview?.api?.list_version_content) {
+    manageList.replaceChildren();
+    return;
+  }
+
+  try {
+    const result =
+      await window.pywebview.api.list_version_content(manageCategory);
+
+    if (!result.ok) {
+      throw new Error(result.message || "读取版本内容失败");
+    }
+
+    manageFolder = result.folder || "";
+    manageItems = result.items || [];
+    renderManageList();
+  } catch (error) {
+    manageList.replaceChildren();
+    const message = document.createElement("span");
+    message.className = "manage-empty";
+    message.textContent = error?.message || "读取版本内容失败";
+    manageList.appendChild(message);
+  }
+}
+
+function selectManageCategory(category) {
+  manageCategory = category;
+  manageTabs.forEach((button) => {
+    button.classList.toggle(
+      "is-active",
+      button.dataset.manageCategory === category
+    );
+  });
+  loadManageList();
+}
+
+function openManageView() {
+  closeCornerPanel();
+  closeAccountMenu();
+  closeManageMenu();
+  closeManageDetail();
+  manageVersion.textContent = currentVersion || selectedGameVersion || "";
+  launcher.dataset.view = "manage";
+  selectManageCategory("mods");
+}
+
+function showManageMenu(x, y, item) {
+  manageMenuItem = item;
+  manageMenuToggle.textContent = item.disabled ? "启用" : "禁用";
+  manageMenu.hidden = false;
+  const rect = manageMenu.getBoundingClientRect();
+  manageMenu.style.left = `${Math.max(
+    12,
+    Math.min(x, window.innerWidth - rect.width - 12)
+  )}px`;
+  manageMenu.style.top = `${Math.max(
+    12,
+    Math.min(y, window.innerHeight - rect.height - 12)
+  )}px`;
+}
+
+function openManageDetail(item) {
+  manageSelectedItem = item;
+  manageDetailName.textContent =
+    item.chinese_name || item.english_name;
+  manageDetailEnglish.textContent = item.chinese_name
+    ? item.english_name
+    : "";
+  manageDetailMeta.textContent = `${formatManageSize(
+    item.size
+  )} · ${item.disabled ? "已禁用" : "已启用"}`;
+  manageDetailPath.textContent = manageFolder
+    ? `${manageFolder}\\${item.file}`
+    : item.file;
+  manageDetailToggle.textContent = item.disabled ? "启用" : "禁用";
+  manageDetailDialog.hidden = false;
+}
+
+async function toggleManageItem(item) {
+  if (!item || !window.pywebview?.api?.toggle_version_content) {
+    return;
+  }
+
+  await window.pywebview.api.toggle_version_content(
+    manageCategory,
+    item.file
+  );
+  closeManageDetail();
+  loadManageList();
+}
+
+function deleteManageItem(item) {
+  if (!item || !window.pywebview?.api?.delete_version_content) {
+    return;
+  }
+
+  showConfirm("删除后将移到回收站，是否继续", async () => {
+    await window.pywebview.api.delete_version_content(
+      manageCategory,
+      item.file
+    );
+    closeManageDetail();
+    loadManageList();
+  });
 }
 
 function updateVerifyButton() {
@@ -2202,6 +2449,54 @@ downloadCancelButton.addEventListener("click", async () => {
     await window.pywebview.api.cancel_download();
   } catch {
     downloadCancelButton.disabled = false;
+  }
+});
+
+contentManageButton.addEventListener("click", openManageView);
+manageBack.addEventListener("click", () => {
+  launcher.dataset.view = "version";
+  closeManageMenu();
+  closeManageDetail();
+});
+manageTabs.forEach((button) => {
+  button.addEventListener("click", () => {
+    selectManageCategory(button.dataset.manageCategory);
+  });
+});
+manageMenuDetail.addEventListener("click", () => {
+  const item = manageMenuItem;
+  closeManageMenu();
+  if (item) {
+    openManageDetail(item);
+  }
+});
+manageMenuDelete.addEventListener("click", () => {
+  const item = manageMenuItem;
+  closeManageMenu();
+  deleteManageItem(item);
+});
+manageMenuToggle.addEventListener("click", () => {
+  const item = manageMenuItem;
+  closeManageMenu();
+  toggleManageItem(item);
+});
+manageDetailToggle.addEventListener("click", () => {
+  toggleManageItem(manageSelectedItem);
+});
+manageDetailDelete.addEventListener("click", () => {
+  deleteManageItem(manageSelectedItem);
+});
+manageDetailClose.addEventListener("click", closeManageDetail);
+document.addEventListener("click", (event) => {
+  if (!manageMenu.hidden && !manageMenu.contains(event.target)) {
+    closeManageMenu();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeManageMenu();
+    closeManageDetail();
+    closeConfirm();
   }
 });
 
