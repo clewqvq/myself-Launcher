@@ -31,3 +31,11 @@
 ## 发布安全
 
 每次推送到 GitHub 前会通过本地 `pre-push` 钩子运行 `release_check.py`，检查已跟踪文件里是否包含玩家名、UUID、GitHub 令牌、本地配置、日志或头像缓存。当前项目已启用 `.githooks`。
+
+## 自动发布
+
+推送 `v*` 标签（例如 `v1.0.0`）会触发 GitHub Actions：在 Windows 上运行发布检查、使用 PyInstaller 构建 `--onedir` 版本，并创建附带 `MinecraftLauncher-windows-x64.zip` 的 GitHub Release。
+
+## 许可证
+
+本项目使用 MIT License，详见 [LICENSE](LICENSE)。
