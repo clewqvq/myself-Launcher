@@ -3,6 +3,7 @@ import getpass
 import glob
 import hashlib
 import json
+import logging
 import os
 import platform
 import re
@@ -28,6 +29,7 @@ from concurrent.futures import (
 )
 from html import unescape
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 try:
     import winreg
@@ -176,17 +178,113 @@ def _get_json(url, headers=None):
     return _request_json(url, headers=headers)
 
 
+_LOGGING_LOCK = threading.Lock()
+_LOGGING_READY = False
+
+_JSON_SECRET_RE = re.compile(
+    (
+        r'("(?:access_token|refresh_token|accessToken|refreshToken)"'
+        r"\s*:\s*)\"[^\"]*\""
+    ),
+    re.IGNORECASE,
+)
+_QUERY_SECRET_RE = re.compile(
+    r"([?&](?:access_token|refresh_token|code)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
+_BEARER_SECRET_RE = re.compile(
+    r"(Authorization:\s*Bearer\s+)\S+",
+    re.IGNORECASE,
+)
+
+
+def redact(text):
+    if text is None:
+        return ""
+
+    text = str(text)
+    text = _JSON_SECRET_RE.sub(r'\1"***"', text)
+    text = _QUERY_SECRET_RE.sub(r"\1***", text)
+    text = _BEARER_SECRET_RE.sub(r"\1***", text)
+    return text
+
+
+def _build_rotating_handler(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        path,
+        maxBytes=2 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(
+        logging.Formatter(
+            "[%(asctime)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    return handler
+
+
+def setup_logging(log_dir):
+    global _LOGGING_READY
+
+    if _LOGGING_READY:
+        return
+
+    with _LOGGING_LOCK:
+        if _LOGGING_READY:
+            return
+
+        handlers = []
+
+        try:
+            log_dir = Path(log_dir)
+            mapping = {
+                "launcher.auth": "auth.log",
+                "launcher.game": "latest.log",
+                "launcher.task.install": "loader-install.log",
+                "launcher.task.download": "download.log",
+            }
+
+            for name, filename in mapping.items():
+                handlers.append(
+                    (
+                        name,
+                        _build_rotating_handler(log_dir / filename),
+                    )
+                )
+
+            for name, handler in handlers:
+                logger = logging.getLogger(name)
+                logger.setLevel(logging.INFO)
+                logger.propagate = False
+                if logger.handlers:
+                    handler.close()
+                else:
+                    logger.addHandler(handler)
+
+            parent = logging.getLogger("launcher.task")
+            parent.setLevel(logging.INFO)
+            parent.propagate = False
+            _LOGGING_READY = True
+        except Exception:
+            for _, handler in handlers:
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+
+
 def _log_http_error(url, status, raw):
     try:
-        base = Path(os.environ.get("APPDATA") or Path.home())
-        log_path = base / "MinecraftLauncher" / "logs" / "auth.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(log_path, "a", encoding="utf-8", errors="replace") as log:
-            log.write(
-                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                f"{url} -> HTTP {status}\n{raw}\n\n"
-            )
+        logging.getLogger("launcher.auth").info(
+            "%s -> HTTP %s\n%s",
+            redact(url),
+            status,
+            redact(raw),
+        )
     except Exception:
         pass
 
@@ -661,6 +759,10 @@ class Api:
             config_path = base / "MinecraftLauncher" / "config.json"
 
         self.config_path = Path(config_path)
+        try:
+            setup_logging(self.config_path.parent / "logs")
+        except Exception:
+            pass
         self.auth_path = (
             self.config_path.parent / "accounts" / "auth.json"
         )
@@ -2813,22 +2915,14 @@ class Api:
         _download_urls(installer_urls, installer)
 
         log_path = self.config_path.parent / "logs" / "loader-install.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        install_logger = logging.getLogger("launcher.task.install")
+        install_logger.info("%s -> %s", loader_id, game_root)
         self.download_state.update(
             94,
             f"正在安装 {loader_name.title()} {version}",
         )
 
-        with open(
-            log_path,
-            "a",
-            encoding="utf-8",
-            errors="replace",
-        ) as log:
-            log.write(
-                f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                f"{loader_id} -> {game_root}\n"
-            )
+        try:
             result = subprocess.run(
                 [
                     str(java_path),
@@ -2838,11 +2932,32 @@ class Api:
                     str(game_root),
                 ],
                 cwd=str(game_root),
-                stdout=log,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=600,
                 **_hidden_process_kwargs(),
             )
+        except subprocess.TimeoutExpired as exc:
+            install_logger.error(
+                "%s 安装器超时：%s",
+                loader_name.title(),
+                redact(str(exc)),
+            )
+            raise
+
+        output = (result.stdout or "").rstrip()
+
+        if output:
+            install_logger.info("%s", redact(output))
+
+        install_logger.info(
+            "%s 安装器返回码 %s",
+            loader_name.title(),
+            result.returncode,
+        )
 
         if result.returncode != 0:
             raise RuntimeError(
@@ -3129,22 +3244,12 @@ class Api:
             self.download_state.cancel()
         except Exception as exc:
             try:
-                log_path = (
-                    self.config_path.parent / "logs" / "download.log"
+                logging.getLogger("launcher.task.download").error(
+                    "%s / %s\n%s",
+                    version_id,
+                    loader_id,
+                    redact(traceback.format_exc()),
                 )
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(
-                    log_path,
-                    "a",
-                    encoding="utf-8",
-                    errors="replace",
-                ) as log:
-                    log.write(
-                        f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
-                        f"{version_id} / {loader_id}\n"
-                    )
-                    log.write(traceback.format_exc())
-                    log.write("\n")
             except Exception:
                 pass
             self.download_state.fail(exc)
@@ -5221,16 +5326,12 @@ class Api:
 
     def _stream_process_output(self, process, log_path):
         try:
-            with open(
-                log_path,
-                "a",
-                encoding="utf-8",
-                errors="replace",
-            ) as log:
-                for line in process.stdout:
-                    log.write(line)
-                    log.flush()
-                    self.launch_state.append_log(line)
+            logger = logging.getLogger("launcher.game")
+
+            for line in process.stdout:
+                raw_line = line.rstrip()
+                self.launch_state.append_log(raw_line)
+                logger.info("%s", redact(raw_line))
         except Exception as exc:
             self.launch_state.append_log(f"[launcher] 日志读取失败：{exc}")
 
@@ -5256,7 +5357,13 @@ class Api:
 
             self.launch_state.update(75, "正在启动 Minecraft")
             log_path = self.config_path.parent / "logs" / "latest.log"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            logging.getLogger("launcher.game").info(
+                "===== %s | %s =====",
+                info.get("display_name")
+                or info.get("version_id")
+                or "unknown",
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+            )
             process_kwargs = _hidden_process_kwargs()
 
             process = subprocess.Popen(
