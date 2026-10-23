@@ -224,6 +224,9 @@ let downloadRingResetTimer = null;
 let lastRingProgress = null;
 let lastLaunchStatusMessage = null;
 let lastLaunchStatusError = null;
+let launchSuccessShown = false;
+let launchStatusFadeTimer = null;
+let launchStatusClearTimer = null;
 let lastDownloadProgress = null;
 let lastDownloadMessage = null;
 let lastLaunchLogRevision = -1;
@@ -837,23 +840,32 @@ async function updateContentTranslations(items) {
     return;
   }
 
-  try {
-    const result =
-      await window.pywebview.api.get_content_translations(
-        items.map((item) => ({
-          source: item.source,
-          project_id: item.project_id,
-          title: item.title,
-          slug: item.slug || "",
-        }))
-      );
-
-    if (result?.ok) {
-      applyContentTranslations(result.translations || {});
+  const translateBatch = async (batch) => {
+    if (!batch.length) {
+      return;
     }
-  } catch {
-    // 译名获取失败时保留英文原名。
-  }
+
+    try {
+      const result =
+        await window.pywebview.api.get_content_translations(
+          batch.map((item) => ({
+            source: item.source,
+            project_id: item.project_id,
+            title: item.title,
+            slug: item.slug || "",
+          }))
+        );
+
+      if (result?.ok) {
+        applyContentTranslations(result.translations || {});
+      }
+    } catch {
+      // 译名获取失败时保留英文原名。
+    }
+  };
+
+  await translateBatch(items.slice(0, 10));
+  translateBatch(items.slice(10));
 }
 
 function renderDownloadVersionOptions() {
@@ -2690,10 +2702,26 @@ function setLaunchStatus(message, isError = false) {
   if (message) {
     launchStatus.textContent = message;
     launchStatus.classList.toggle("is-error", isError);
+    launchStatus.classList.add("is-visible");
   } else {
     launchStatus.textContent = "";
-    launchStatus.classList.remove("is-error");
+    launchStatus.classList.remove("is-error", "is-visible");
   }
+}
+
+function flashLaunchStatus(message, duration = 5000) {
+  clearTimeout(launchStatusFadeTimer);
+  clearTimeout(launchStatusClearTimer);
+  setLaunchStatus(message);
+  launchStatusFadeTimer = setTimeout(() => {
+    launchStatus.classList.remove("is-visible");
+    lastLaunchStatusMessage = null;
+    launchStatusClearTimer = setTimeout(() => {
+      if (!launchStatus.classList.contains("is-visible")) {
+        launchStatus.textContent = "";
+      }
+    }, 450);
+  }, duration);
 }
 
 function updateLaunchRing(progress) {
@@ -2833,6 +2861,7 @@ async function pollLaunchStatus() {
     const status = await window.pywebview.api.get_launch_status();
     const progress = Number(status.progress || 0);
     const hasError = Boolean(status.error);
+    const state = status.state || "";
     let nextGameRunning;
 
     if (hasError) {
@@ -2857,12 +2886,28 @@ async function pollLaunchStatus() {
         isGameRunning ? "关闭游戏" : "开始游戏"
       );
     }
+
+    if (state === "running") {
+      if (!launchSuccessShown) {
+        launchSuccessShown = true;
+        flashLaunchStatus("游戏启动成功", 5000);
+      }
+    } else if (
+      state === "stopped" &&
+      (launchSuccessShown || status.message === "游戏已关闭")
+    ) {
+      launchSuccessShown = false;
+      clearTimeout(launchStatusFadeTimer);
+      clearTimeout(launchStatusClearTimer);
+      setLaunchStatus("");
+    }
+
     if (!downloadRingVisible) {
       updateLaunchRing(status.progress || 0);
 
       if (status.error) {
         setLaunchStatus(status.error, true);
-      } else if (status.message) {
+      } else if (state !== "running" && state !== "stopped") {
         setLaunchStatus(status.message);
       }
     }

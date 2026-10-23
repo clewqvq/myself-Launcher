@@ -1,16 +1,18 @@
 # Minecraft Launcher
 
-一个极简白色主义风格的 Minecraft 启动器原型，使用 HTML/CSS/JavaScript 构建界面，Python + PyWebView + PyInstaller 打包为 Windows 单文件 exe。
+一个极简、拟态玻璃风格的 Minecraft 启动器，使用 HTML/CSS/JavaScript 构建界面，Python + PyWebView + PyInstaller 打包为 Windows 桌面程序。支持多版本管理、模组下载与本地内容管理、正版登录，以及带进度反馈的一键启动。
 
 ## 功能
 
-- 版本号跳转、重命名和持久化
-- 导入本地 Minecraft 整合包文件夹
-- 自动读取版本 json、Fabric 配置和账号信息
-- 点击开始按钮启动 Minecraft，并显示启动进度环
-- 游戏运行中再次点击开始按钮可关闭游戏
-- 右键玩家头像可进行 Microsoft 正版验证，登录后使用正版玩家名、头像和令牌启动游戏
-- 左侧提供模组下载入口，支持通过 BMCLAPI 国内镜像安装原版及 Fabric 版本
+- 导入多个游戏文件夹，按导入顺序展示文件夹与版本，支持版本重命名和切换
+- 下载原版、Fabric、Forge、NeoForge，使用 BMCLAPI / 官方多源回退与 SHA1 校验
+- 搜索并下载模组、光影、材质包；支持中文关键词、MC 百科译名、游戏版本/加载器/模组版本选择
+- 下载前使用 Windows 原生文件夹选择器，可保存到当前版本对应目录或自定义位置
+- 模组、光影、材质包本地管理：查看详情、禁用（`.disabled`）和删除到 Windows 回收站
+- 下载兼容性提醒、取消下载、进度环和游戏进程控制
+- Microsoft 正版登录与退出，使用正版玩家名、头像和令牌启动游戏
+- 设置 Java 路径、启动内存、默认版本、深色模式和自定义壁纸
+- 极简拟态玻璃界面，支持浅色/深色主题与窄屏布局
 
 ## 正版验证说明
 
@@ -18,7 +20,7 @@
 
 ## 运行
 
-使用下方打包命令生成 `dist\MinecraftLauncher.exe` 后运行。
+使用下方打包命令生成 `dist\MinecraftLauncher\MinecraftLauncher.exe` 后运行。
 
 ## 打包
 

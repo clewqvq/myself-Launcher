@@ -2080,6 +2080,13 @@ button:focus-visible {
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 420ms ease;
+}
+
+.launch-status.is-visible {
+  opacity: 1;
 }
 
 .launch-status.is-error {

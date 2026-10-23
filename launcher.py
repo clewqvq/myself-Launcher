@@ -20,7 +20,12 @@ import urllib.request
 import webbrowser
 import zipfile
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from html import unescape
 from pathlib import Path
 
@@ -670,6 +675,7 @@ class Api:
         self._version_cache = {}
         self._manifest_cache = None
         self._manifest_cache_time = 0
+        self._manifest_refreshing = False
         self._translation_cache = {}
         self._query_translation_cache = {}
         self._translation_misses = set()
@@ -678,6 +684,7 @@ class Api:
         )
         self._translation_loaded = False
         self._content_search_cache = {}
+        self._content_disk_cache = None
         self._loader_cache = {}
         self._java_version_cache = {}
         self._java_choice_cache = {}
@@ -1893,24 +1900,44 @@ class Api:
             / "version_manifest.json"
         )
 
+        manifest = self._read_version_manifest_cache(cache_path)
+
+        if manifest:
+            self._manifest_cache = manifest
+            self._manifest_cache_time = now
+            if not self._manifest_refreshing:
+                self._manifest_refreshing = True
+                threading.Thread(
+                    target=self._refresh_version_manifest,
+                    args=(cache_path,),
+                    daemon=True,
+                ).start()
+            return manifest
+
+        manifest = _fetch_json_urls(
+            VERSION_MANIFEST_URLS,
+            timeout=8,
+            attempts=1,
+        )
+        self._manifest_cache = manifest
+        self._manifest_cache_time = now
+        self._write_version_manifest_cache(cache_path, manifest)
+        return manifest
+
+    def _refresh_version_manifest(self, cache_path):
         try:
             manifest = _fetch_json_urls(
                 VERSION_MANIFEST_URLS,
                 timeout=8,
                 attempts=1,
             )
-        except Exception:
-            manifest = self._read_version_manifest_cache(cache_path)
-            if not manifest:
-                raise
             self._manifest_cache = manifest
-            self._manifest_cache_time = now
-            return manifest
-
-        self._manifest_cache = manifest
-        self._manifest_cache_time = now
-        self._write_version_manifest_cache(cache_path, manifest)
-        return manifest
+            self._manifest_cache_time = time.time()
+            self._write_version_manifest_cache(cache_path, manifest)
+        except Exception:
+            pass
+        finally:
+            self._manifest_refreshing = False
 
     @staticmethod
     def _read_version_manifest_cache(path):
@@ -3614,6 +3641,60 @@ class Api:
             pagination.get("totalCount") or len(results)
         )
 
+    def _content_cache_path(self):
+        return (
+            self.config_path.parent
+            / "cache"
+            / "content_search.json"
+        )
+
+    def _load_content_disk_cache(self):
+        if self._content_disk_cache is not None:
+            return self._content_disk_cache
+
+        try:
+            data = json.loads(
+                self._content_cache_path().read_text(
+                    encoding="utf-8"
+                )
+            )
+        except Exception:
+            data = {}
+
+        self._content_disk_cache = (
+            data if isinstance(data, dict) else {}
+        )
+        return self._content_disk_cache
+
+    def _save_content_disk_cache(self):
+        try:
+            cache = self._load_content_disk_cache()
+
+            if len(cache) > 120:
+                ordered = sorted(
+                    cache.items(),
+                    key=lambda item: (
+                        item[1].get("saved_at", 0)
+                        if isinstance(item[1], dict)
+                        else 0
+                    ),
+                )
+                self._content_disk_cache = dict(ordered[-120:])
+
+            path = self._content_cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_suffix(".tmp")
+            temp.write_text(
+                json.dumps(
+                    self._content_disk_cache,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temp, path)
+        except Exception:
+            pass
+
     def search_content(
         self,
         category,
@@ -3639,6 +3720,21 @@ class Api:
         cached = self._content_search_cache.get(cache_key)
         if cached and time.time() - cached[0] < 300:
             return cached[1]
+
+        disk_key = "|".join(str(value) for value in cache_key)
+        disk_entry = self._load_content_disk_cache().get(disk_key)
+
+        if isinstance(disk_entry, dict):
+            response = disk_entry.get("response")
+            age = time.time() - float(
+                disk_entry.get("saved_at") or 0
+            )
+            if response and age < 86400:
+                self._content_search_cache[cache_key] = (
+                    time.time(),
+                    response,
+                )
+                return response
 
         search_query = str(query or "").strip()
 
@@ -3678,19 +3774,49 @@ class Api:
             ),
         ]
         succeeded = 0
+        deadline = time.time() + 6
+        pending = set(futures)
+        first_success_at = None
 
         try:
-            # 慢源不让用户干等：拿到快源结果就返回，慢源下次命中缓存
-            for future in as_completed(futures, timeout=6):
-                try:
-                    items, total = future.result()
-                except Exception:
-                    continue
-                succeeded += 1
-                results.extend(items)
-                totals.append(total)
-        except TimeoutError:
-            pass
+            # 慢源不让用户干等：首个源成功后最多再等 1.2 秒
+            while pending and time.time() < deadline:
+                timeout = deadline - time.time()
+
+                if first_success_at is not None:
+                    timeout = min(
+                        timeout,
+                        max(
+                            0.1,
+                            first_success_at + 1.2 - time.time(),
+                        ),
+                    )
+
+                done, pending = wait(
+                    pending,
+                    timeout=timeout,
+                    return_when=FIRST_COMPLETED,
+                )
+
+                if not done:
+                    break
+
+                for future in done:
+                    try:
+                        items, total = future.result()
+                    except Exception:
+                        continue
+                    succeeded += 1
+                    results.extend(items)
+                    totals.append(total)
+                    if first_success_at is None:
+                        first_success_at = time.time()
+
+                if (
+                    first_success_at is not None
+                    and time.time() >= first_success_at + 1.2
+                ):
+                    break
         finally:
             executor.shutdown(wait=False)
 
@@ -3730,6 +3856,11 @@ class Api:
             time.time(),
             response,
         )
+        self._load_content_disk_cache()[disk_key] = {
+            "saved_at": time.time(),
+            "response": response,
+        }
+        self._save_content_disk_cache()
         return response
 
     def get_content_versions(
